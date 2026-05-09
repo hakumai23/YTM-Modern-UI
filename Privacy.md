@@ -17,14 +17,9 @@ We use the Chrome Storage API to save the following data locally on your browser
 To provide specific features, the extension sends limited data to the following third-party APIs. We do not transmit personally identifiable information (PII) like your real name or email address to these services, except for authentication tokens where necessary for Cloud Sync.
 
 - **Lyrics Fetching:**
-  - **Services:** LRCLib (lrclib.net), LRCHub (lrchub.coreone.work)
+  - **Services:** LRCHub (lrchub.coreone.work)
   - **Data Sent:** Song title, artist name, and album name.
   - **Purpose:** To search for and download synchronized lyrics.
-
-- **Translation:**
-  - **Service:** DeepL API (deepl.com)
-  - **Data Sent:** Lyric text.
-  - **Purpose:** To provide Japanese translations for lyrics upon your request.
 
 - **Cloud Sync (Optional):**
   - **Service:** Immersion Project Server (immersionproject.coreone.work)
@@ -34,7 +29,7 @@ To provide specific features, the extension sends limited data to the following 
 ## 2. How We Use Your Information
 
 We use the collected information solely for the following purposes:
-- To display synchronized lyrics and translations in real-time.
+- To display synchronized lyrics in real-time.
 - To generate personal listening statistics (Daily Replay) for your viewing.
 - To maintain your preferred UI settings.
 - To synchronize your data across devices (only if Cloud Sync is enabled).
@@ -47,7 +42,7 @@ Data is only shared with the third-party services listed in Section 1 solely for
 ## 4. Your Control and Rights
 
 - **Data Deletion:** You can clear your playback history and settings at any time by clearing your browser's extension data or using the "Reset" button within the extension settings.
-- **Opt-out:** You can choose not to use the Cloud Sync or Translation features if you do not wish to send data to the respective servers.
+- **Opt-out:** You can choose not to use Cloud Sync if you do not wish to send data to the server.
 
 ## 5. Changes to This Policy
 

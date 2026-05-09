@@ -1,101 +1,31 @@
-export const SHARED_TRANSLATE_ENDPOINTS = [
-  'https://immersionproject.coreone.work/api/translate',
-  'https://immersionproject.coreone.work/api/translate/'
-];
+export const LRCHUB_LYRICS_ENDPOINT = 'https://lrchub.coreone.work/api/lyrics';
 
-export const COMMUNITY_REMAINING_ENDPOINTS = [
-  'https://immersionproject.coreone.work/api/community/remaining',
-  'https://immersionproject.coreone.work/api/community/remaining/',
-  'https://immersionproject.coreone.work/api/community/remaining',
-  'https://immersionproject.coreone.work/api/community/remaining/',
-];
+const emptyLyricsResult = () => ({
+  lyrics: '',
+  dynamicLines: null,
+  subLyrics: '',
+  hasSelectCandidates: false,
+  candidates: [],
+  config: null,
+  requests: [],
+});
 
-export const normalizeArtist = (s) =>
-  (s || '').toLowerCase().replace(/\s+/g, '').trim();
-
-export const pickBestLrcLibHit = (items, artist) => {
-  if (!Array.isArray(items) || !items.length) return null;
-  const target = normalizeArtist(artist);
-  const getArtistName = (it) =>
-    it.artistName || it.artist || it.artist_name || '';
-
-  let hit = null;
-
-  if (target) {
-    hit = items.find(it => {
-      const a = normalizeArtist(getArtistName(it));
-      return a && a === target && (it.syncedLyrics || it.synced_lyrics);
-    });
-    if (hit) return hit;
-
-    hit = items.find(it => {
-      const a = normalizeArtist(getArtistName(it));
-      return a && a === target && (it.plainLyrics || it.plain_lyrics);
-    });
-    if (hit) return hit;
-
-    hit = items.find(it => {
-      const a = normalizeArtist(getArtistName(it));
-      return a && (a.includes(target) || target.includes(a)) && (it.syncedLyrics || it.synced_lyrics);
-    });
-    if (hit) return hit;
-
-    hit = items.find(it => {
-      const a = normalizeArtist(getArtistName(it));
-      return a && (a.includes(target) || target.includes(a)) && (it.plainLyrics || it.plain_lyrics);
-    });
-    if (hit) return hit;
+const unwrapResponse = (payload) => {
+  if (payload && typeof payload === 'object' && payload.response && typeof payload.response === 'object') {
+    return payload.response;
   }
-
-  return null;
+  return payload;
 };
 
-export const fetchFromLrcLib = (track, artist) => {
-  if (!track) return Promise.resolve({ lyrics: '', candidates: [] });
-  const url = `https://lrclib.net/api/search?track_name=${encodeURIComponent(track)}`;
-  console.log('[BG] LrcLib search URL:', url);
-
-  return fetch(url)
-    .then(r => (r.ok ? r.json() : Promise.reject(r.statusText)))
-    .then(list => {
-      console.log('[BG] LrcLib search result count:', Array.isArray(list) ? list.length : 'N/A');
-      const items = Array.isArray(list) ? list : [];
-      
-      const hit = pickBestLrcLibHit(items, artist);
-      
-      let bestLyrics = '';
-      if (hit) {
-        const synced = hit.syncedLyrics || hit.synced_lyrics || '';
-        const plain = hit.plainLyrics || hit.plain_lyrics || hit.plain_lyrics_text || '';
-        bestLyrics = (synced || plain || '').trim();
-      }
-
-      const candidates = items.map(item => {
-        const synced = item.syncedLyrics || item.synced_lyrics || '';
-        const plain = item.plainLyrics || item.plain_lyrics || item.plain_lyrics_text || '';
-        const txt = (synced || plain || '').trim();
-        if (!txt) return null;
-
-        return {
-          id: `lrclib_${item.id}`,
-          artist: item.artistName || item.artist,
-          title: item.trackName || item.trackName,
-          source: 'LrcLib',
-          has_synced: !!synced,
-          lyrics: txt
-        };
-      }).filter(Boolean);
-
-      return { lyrics: bestLyrics, candidates: candidates };
-    })
-    .catch(err => {
-      console.error('[BG] LrcLib error:', err);
-      return { lyrics: '', candidates: [] };
-    });
+const firstString = (...values) => {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
 };
 
 export const formatLrcTime = (seconds) => {
-  const total = Math.max(0, seconds);
+  const total = Math.max(0, Number(seconds) || 0);
   const min = Math.floor(total / 60);
   const sec = Math.floor(total - min * 60);
   const cs = Math.floor((total - min * 60 - sec) * 100);
@@ -105,683 +35,199 @@ export const formatLrcTime = (seconds) => {
   return `${mm}:${ss}.${cc}`;
 };
 
-export const fetchCandidatesFromUrl = (url) => {
-  if (!url) {
-    return Promise.resolve({
-      candidates: [],
-      hasSelectCandidates: false,
-      config: null,
-      requests: [],
-    });
+const getDynamicLineStartMs = (line) => {
+  if (!line || typeof line !== 'object') return null;
+
+  if (typeof line.startTimeMs === 'number' && Number.isFinite(line.startTimeMs)) {
+    return line.startTimeMs;
   }
 
-  try {
-    const base = 'https://lrchub.coreone.work';
-    const u = new URL(url, base);
-    u.protocol = 'https:';
-    if (!u.searchParams.has('include_lyrics')) {
-      u.searchParams.set('include_lyrics', '1');
-    }
-    url = u.toString();
-  } catch (e) {
-    console.warn('[BG] invalid candidates url:', url, e);
+  if (typeof line.startTimeMs === 'string') {
+    const n = Number(line.startTimeMs);
+    if (Number.isFinite(n)) return n;
   }
 
-  return fetch(url)
-    .then(async (r) => {
-      let json;
-      try {
-        json = await r.json();
-      } catch (e) {
-        throw new Error(r.statusText || 'Invalid JSON');
+  if (typeof line.time === 'number' && Number.isFinite(line.time)) {
+    return line.time * 1000;
+  }
+
+  if (Array.isArray(line.chars) && line.chars.length) {
+    const times = line.chars
+      .map(ch => {
+        if (typeof ch?.t === 'number' && Number.isFinite(ch.t)) return ch.t;
+        if (typeof ch?.t === 'string') {
+          const n = Number(ch.t);
+          if (Number.isFinite(n)) return n;
+        }
+        return null;
+      })
+      .filter(v => v !== null);
+    if (times.length) return Math.min(...times);
+  }
+
+  return null;
+};
+
+export const buildLrcFromDynamicLines = (lines) => {
+  if (!Array.isArray(lines) || !lines.length) return '';
+
+  return lines
+    .map(line => {
+      const ms = getDynamicLineStartMs(line);
+      if (ms === null) return null;
+
+      let textLine = '';
+      if (typeof line.text === 'string' && line.text.length) {
+        textLine = line.text;
+      } else if (Array.isArray(line.chars)) {
+        textLine = line.chars
+          .map(ch => ch?.c || ch?.text || ch?.caption || '')
+          .join('');
       }
 
-      const res = json.response || json;
-      const list = Array.isArray(res.candidates) ? res.candidates : [];
-      const config = res.config || null;
-      const requests = Array.isArray(res.requests) ? res.requests : [];
-      const hasSelectCandidates = list.length > 1;
-
-      return {
-        candidates: list,
-        hasSelectCandidates,
-        config,
-        requests,
-      };
+      const timeTag = `[${formatLrcTime(ms / 1000)}]`;
+      return textLine ? `${timeTag} ${String(textLine)}` : timeTag;
     })
-    .catch(err => {
-      console.error('[BG] candidates error:', err);
-      return { candidates: [], hasSelectCandidates: false, config: null, requests: [] };
-    });
+    .filter(Boolean)
+    .join('\n')
+    .trimEnd();
 };
 
-export const buildCandidatesUrl = (res, payloadVideoId) => {
-  const base = 'https://lrchub.coreone.work';
-  const raw = res.candidates_api_url || '';
+export const extractLyricsText = (payload) => {
+  const res = unwrapResponse(payload);
+  if (typeof res === 'string') return res.trim();
+  if (!res || typeof res !== 'object') return '';
 
-  try {
-    if (raw) {
-      const u = new URL(raw, base);
-      u.protocol = 'https:';
-      if (!u.searchParams.has('include_lyrics')) {
-        u.searchParams.set('include_lyrics', '1');
-      }
-      return u.toString();
-    }
-  } catch (e) {
-  }
-
-  const vid = res.video_id || payloadVideoId;
-  if (!vid) return null;
-  const u = new URL('/api/lyrics_candidates', base);
-  u.searchParams.set('video_id', vid);
-  u.searchParams.set('include_lyrics', '1');
-  return u.toString();
+  return firstString(
+    res.lyrics,
+    res.synced_lyrics,
+    res.syncedLyrics,
+    res.plain_lyrics,
+    res.plainLyrics,
+    res.plain_lyrics_text,
+    res.lrc,
+    res.text
+  );
 };
 
-export const fetchFromLrchub = (track, artist, youtube_url, video_id) => {
-  return fetch('https://lrchub.coreone.work/api/lyrics', {
+const normalizeCandidate = (candidate, index) => {
+  if (!candidate || typeof candidate !== 'object') return null;
+
+  const lyrics = extractLyricsText(candidate);
+  const id = firstString(
+    candidate.id,
+    candidate.candidate_id,
+    candidate.candidateId,
+    candidate.path,
+    candidate.select,
+    candidate.title,
+    candidate.name
+  ) || `lrchub_${index}`;
+
+  return {
+    ...candidate,
+    id,
+    candidate_id: candidate.candidate_id || candidate.candidateId || id,
+    title: candidate.title || candidate.track || candidate.track_name || candidate.name || '',
+    artist: candidate.artist || candidate.artist_name || candidate.artistName || '',
+    source: candidate.source || 'LRCHub',
+    has_synced: typeof candidate.has_synced === 'boolean'
+      ? candidate.has_synced
+      : !!firstString(candidate.synced_lyrics, candidate.syncedLyrics),
+    lyrics,
+  };
+};
+
+const normalizeCandidates = (res) => {
+  if (!res || typeof res !== 'object') return [];
+
+  const raw =
+    (Array.isArray(res.candidates) && res.candidates) ||
+    (Array.isArray(res.lyrics_candidates) && res.lyrics_candidates) ||
+    (Array.isArray(res.select_candidates) && res.select_candidates) ||
+    [];
+
+  return raw
+    .map((candidate, index) => normalizeCandidate(candidate, index))
+    .filter(Boolean);
+};
+
+export const fetchFromLrchub = (track, artist, videoId) => {
+  const cleanTrack = String(track || '').trim();
+  const cleanArtist = String(artist || '').trim();
+  const cleanVideoId = String(videoId || '').trim();
+
+  if (!cleanTrack) return Promise.resolve(emptyLyricsResult());
+
+  const body = { track: cleanTrack, artist: cleanArtist };
+  if (cleanVideoId) body.video_id = cleanVideoId;
+
+  return fetch(LRCHUB_LYRICS_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ track, artist, youtube_url, video_id }),
+    body: JSON.stringify(body),
   })
-    .then(r => r.text())
-    .then(text => {
-      let lyrics = '';
-      let dynamicLines = null;
-      let hasSelectCandidates = false;
-      let candidates = [];
-      let config = null;
-      let requests = [];
+    .then(async (r) => {
+      const text = await r.text();
+      let json = null;
 
       try {
-        const json = JSON.parse(text);
-        const res = json.response || json;
+        json = text ? JSON.parse(text) : null;
+      } catch (e) {
+        json = text;
+      }
 
-        hasSelectCandidates = !!res.has_select_candidates;
-        config = res.config || null;
-        requests = Array.isArray(res.requests) ? res.requests : [];
+      if (!r.ok) {
+        const msg = json && typeof json === 'object'
+          ? (json.error || json.message || r.statusText)
+          : (text || r.statusText);
+        throw new Error(`LRCHub lyrics failed: ${r.status} ${msg}`);
+      }
 
+      const res = unwrapResponse(json);
+      const out = emptyLyricsResult();
+
+      if (res && typeof res === 'object') {
         if (
           res.dynamic_lyrics &&
           Array.isArray(res.dynamic_lyrics.lines) &&
           res.dynamic_lyrics.lines.length
         ) {
-          dynamicLines = res.dynamic_lyrics.lines;
-          const lrcLines = dynamicLines
-            .map(line => {
-              let ms = null;
-              if (typeof line.startTimeMs === 'number') {
-                ms = line.startTimeMs;
-              } else if (typeof line.startTimeMs === 'string') {
-                const n = Number(line.startTimeMs);
-                if (!Number.isNaN(n)) ms = n;
-              }
-              if (ms == null) return null;
-
-              let textLine = '';
-              if (typeof line.text === 'string' && line.text.length) {
-                textLine = line.text;
-              } else if (Array.isArray(line.chars)) {
-                textLine = line.chars
-                  .map(c => c.c || c.text || c.caption || '')
-                  .join('');
-              }
-
-              // Keep original spaces (do not auto-trim)
-              textLine = String(textLine ?? '');
-              const timeTag = `[${formatLrcTime(ms / 1000)}]`;
-              return textLine ? `${timeTag} ${textLine}` : timeTag;
-            })
-            .filter(Boolean);
-
-          lyrics = lrcLines.join('\n');
-        } else {
-          const synced = typeof res.synced_lyrics === 'string' ? res.synced_lyrics.trim() : '';
-          const plain = typeof res.plain_lyrics === 'string' ? res.plain_lyrics.trim() : '';
-          if (synced) lyrics = synced;
-          else if (plain) lyrics = plain;
+          out.dynamicLines = res.dynamic_lyrics.lines;
+          out.lyrics = buildLrcFromDynamicLines(out.dynamicLines);
         }
 
-        const url = buildCandidatesUrl(res, video_id);
-        if (url) {
-          return fetchCandidatesFromUrl(url).then(cRes => {
-            candidates = cRes.candidates;
-            hasSelectCandidates = !!(hasSelectCandidates || cRes.hasSelectCandidates);
-            if (cRes.config) config = cRes.config;
-            if (Array.isArray(cRes.requests) && cRes.requests.length) requests = cRes.requests;
+        if (!out.lyrics) out.lyrics = extractLyricsText(res);
 
-            return {
-              lyrics,
-              dynamicLines,
-              hasSelectCandidates,
-              candidates,
-              config,
-              requests,
-            };
-          });
-        }
-      } catch (e) {
+        out.subLyrics = firstString(
+          res.subLyrics,
+          res.sub_lyrics,
+          res.sub_lrc,
+          res.duet_lyrics
+        );
+        out.candidates = normalizeCandidates(res);
+        out.hasSelectCandidates = !!res.has_select_candidates || out.candidates.length > 1;
+        out.config = res.config || null;
+        out.requests = Array.isArray(res.requests) ? res.requests : [];
+      } else {
+        out.lyrics = extractLyricsText(res);
       }
 
-      return { lyrics, dynamicLines, hasSelectCandidates, candidates, config, requests };
+      return out;
+    })
+    .catch(err => {
+      console.error('[BG] LRCHub lyrics error:', err);
+      return emptyLyricsResult();
     });
 };
 
+export const fetchCandidateLyrics = async (candidate_id, candidate) => {
+  const cand = candidate && typeof candidate === 'object'
+    ? candidate
+    : (candidate_id && typeof candidate_id === 'object' ? candidate_id : {});
 
-// --- GitHub raw のブラウザキャッシュ対策: 毎回URLを変えて最新を取りに行く ---
-export const withRandomCacheBuster = (url, buster) => {
-  const v = String(buster || (1000 + Math.floor(Math.random() * 9000)));
-  try {
-    const u = new URL(url);
-    u.searchParams.set('v', v);
-    return u.toString();
-  } catch (e) {
-    const sep = url.includes('?') ? '&' : '?';
-    return url + sep + 'v=' + v;
-  }
+  return extractLyricsText(cand);
 };
-
-export const normalizeCandidateFilePath = (value) => {
-  const s = String(value || '').trim().replace(/^\/+/, '');
-  if (!s) return '';
-
-  const rawPrefix = /^https?:\/\/raw\.githubusercontent\.com\/LRCHub\/[^/]+\/main\/(.*)$/i;
-  const treePrefix = /^https?:\/\/github\.com\/LRCHub\/[^/]+\/(?:blob|tree)\/main\/(.*)$/i;
-
-  let m = s.match(rawPrefix);
-  if (m && m[1]) return String(m[1]).replace(/^\/+/, '');
-  m = s.match(treePrefix);
-  if (m && m[1]) return String(m[1]).replace(/^\/+/, '');
-
-  return s;
-};
-
-export const buildGitHubSelectRawUrl = (video_id, relPath) => {
-  const cleaned = normalizeCandidateFilePath(relPath);
-  if (!video_id || !cleaned) return '';
-  const encoded = cleaned
-    .split('/')
-    .filter(Boolean)
-    .map(seg => encodeURIComponent(seg))
-    .join('/');
-  return `https://raw.githubusercontent.com/LRCHub/${video_id}/main/${encoded.startsWith('select/') ? encoded : 'select/' + encoded}`;
-};
-
-export const normalizeGitHubSelectCandidateEntry = (entry, idx, video_id) => {
-  let obj = null;
-  if (typeof entry === 'string') {
-    obj = { path: entry };
-  } else if (entry && typeof entry === 'object') {
-    obj = { ...entry };
-  } else {
-    return null;
-  }
-
-  const path = normalizeCandidateFilePath(
-    obj.path ||
-    obj.file ||
-    obj.filename ||
-    obj.name ||
-    obj.select ||
-    obj.id ||
-    ''
-  );
-
-  if (!path) return null;
-
-  const basename = path.split('/').pop() || path;
-  const candidateId = String(obj.candidate_id || obj.id || basename);
-  const rawUrl = obj.raw_url || obj.rawUrl || buildGitHubSelectRawUrl(video_id, path);
-  const lyrics = typeof obj.lyrics === 'string' ? obj.lyrics.trim() : '';
-
-  return {
-    ...obj,
-    id: candidateId,
-    candidate_id: candidateId,
-    path,
-    select: obj.select || path,
-    title: obj.title || obj.name || basename,
-    source: obj.source || 'GitHub',
-    raw_url: rawUrl,
-    lyrics,
-  };
-};
-
-export const parseGitHubSelectIndexPayload = (json, video_id) => {
-  const wrap = json && typeof json === 'object' && json.response ? json.response : json;
-
-  let list = [];
-  if (Array.isArray(wrap)) {
-    list = wrap;
-  } else if (wrap && typeof wrap === 'object') {
-    if (Array.isArray(wrap.candidates)) list = wrap.candidates;
-    else if (Array.isArray(wrap.files)) list = wrap.files;
-    else if (Array.isArray(wrap.items)) list = wrap.items;
-    else if (Array.isArray(wrap.list)) list = wrap.list;
-    else if (wrap.entries && typeof wrap.entries === 'object') {
-      list = Object.entries(wrap.entries).map(([k, v]) => (v && typeof v === 'object') ? ({ path: k, ...v }) : ({ path: k }));
-    } else {
-      list = Object.entries(wrap)
-        .filter(([k]) => /\.(?:lrc|txt)$/i.test(String(k || '')))
-        .map(([k, v]) => (v && typeof v === 'object') ? ({ path: k, ...v }) : ({ path: k }));
-    }
-  }
-
-  return list
-    .map((entry, idx) => normalizeGitHubSelectCandidateEntry(entry, idx, video_id))
-    .filter(Boolean);
-};
-
-export const fetchGithubSelectCandidates = async (video_id, bust) => {
-  if (!video_id) return [];
-  const idxUrl = `https://raw.githubusercontent.com/LRCHub/${video_id}/main/select/index.json`;
-  try {
-    const res = await fetch(typeof bust === 'function' ? bust(idxUrl) : withRandomCacheBuster(idxUrl), { cache: 'no-store' });
-    if (!res.ok) return [];
-    const json = await res.json();
-    return parseGitHubSelectIndexPayload(json, video_id);
-  } catch (e) {
-    console.warn('[BG] GitHub select index error:', e);
-    return [];
-  }
-};
-
-export const fetchGithubSelectIndex = async (video_id) => fetchGithubSelectCandidates(video_id);
-
-export const candidateKeySet = (candidate_id, cand) => {
-  const values = [
-    candidate_id,
-    cand && cand.id,
-    cand && cand.candidate_id,
-    cand && cand.path,
-    cand && cand.name,
-    cand && cand.filename,
-    cand && cand.file,
-    cand && cand.title,
-    cand && cand.label,
-    cand && cand.select,
-    cand && cand.list,
-  ].filter(Boolean);
-
-  const set = new Set();
-  values.forEach((value) => {
-    const s = String(value).trim();
-    if (!s) return;
-    set.add(s);
-    set.add(s.toLowerCase());
-
-    const norm = normalizeCandidateFilePath(s);
-    if (norm) {
-      set.add(norm);
-      set.add(norm.toLowerCase());
-    }
-
-    const base = s.split('/').pop();
-    if (base) {
-      set.add(base);
-      set.add(base.toLowerCase());
-      const noExt = base.replace(/\.[^.]+$/, '');
-      if (noExt) {
-        set.add(noExt);
-        set.add(noExt.toLowerCase());
-      }
-    }
-  });
-  return set;
-};
-
-export const findCandidateEntry = (entries, candidate_id, cand) => {
-  const keys = candidateKeySet(candidate_id, cand);
-  if (!Array.isArray(entries) || !entries.length || !keys.size) return null;
-  const probeFields = ['candidate_id', 'id', 'path', 'name', 'filename', 'file', 'title', 'label', 'select', 'list'];
-
-  for (const entry of entries) {
-    if (!entry || typeof entry !== 'object') continue;
-    for (const field of probeFields) {
-      const value = entry[field];
-      if (!value) continue;
-      const entryKeys = candidateKeySet(value, { [field]: value });
-      for (const k of entryKeys) {
-        if (keys.has(k)) return entry;
-      }
-    }
-  }
-  return null;
-};
-
-export const buildCandidateUrls = (video_id, candidate_id, cand, entry) => {
-  const urls = [];
-  const addUrl = (raw) => {
-    if (!raw) return;
-    try {
-      const u = new URL(String(raw), `https://raw.githubusercontent.com/LRCHub/${video_id}/main/`);
-      u.searchParams.set('v', String(1000 + Math.floor(Math.random() * 9000)));
-      urls.push(u.toString());
-    } catch (e) {
-    }
-  };
-
-  const addPath = (raw) => {
-    const p = normalizeCandidateFilePath(raw);
-    if (!p) return;
-    if (/^https?:\/\//i.test(p)) {
-      addUrl(p);
-      return;
-    }
-    addUrl(`https://raw.githubusercontent.com/LRCHub/${video_id}/main/${p}`);
-    if (!p.startsWith('select/')) {
-      addUrl(`https://raw.githubusercontent.com/LRCHub/${video_id}/main/select/${p}`);
-    }
-  };
-
-  [entry, cand].filter(Boolean).forEach((src) => {
-    ['raw_url', 'rawUrl', 'download_url', 'downloadUrl', 'url'].forEach((k) => addUrl(src[k]));
-    ['path', 'name', 'filename', 'file', 'select', 'list'].forEach((k) => addPath(src[k]));
-  });
-
-  const cid = String(candidate_id || '').trim();
-  if (cid) {
-    addPath(cid);
-    addPath(`${cid}.lrc`);
-    addPath(`${cid}.txt`);
-  }
-
-  return [...new Set(urls)];
-};
-
-export const fetchCandidateLyrics = async (video_id, candidate_id, candidate) => {
-  const cand = candidate && typeof candidate === 'object' ? candidate : {};
-  if (typeof cand.lyrics === 'string' && cand.lyrics.trim()) return cand.lyrics.trim();
-  if (!video_id) return '';
-
-  const entries = await fetchGithubSelectIndex(video_id);
-  const entry = findCandidateEntry(entries, candidate_id, cand);
-  const urls = buildCandidateUrls(video_id, candidate_id, cand, entry);
-
-  for (const url of urls) {
-    try {
-      const r = await fetch(url, { cache: 'no-store' });
-      if (!r.ok) continue;
-      const text = (await r.text()).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
-      if (!text) continue;
-      if (/^<!doctype html/i.test(text) || /^<html/i.test(text)) continue;
-      return text;
-    } catch (e) {
-    }
-  }
-  return '';
-};
-
-export const parseMeaningTimeToSec = (value) => {
-  const s = String(value || '').trim();
-  const m = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
-  if (!m) return null;
-  const min = Number(m[1]);
-  const sec = Number(m[2]);
-  let frac = m[3] || '0';
-  if (frac.length === 1) frac += '00';
-  else if (frac.length === 2) frac += '0';
-  const ms = Number(frac.slice(0, 3));
-  if (!Number.isFinite(min) || !Number.isFinite(sec) || !Number.isFinite(ms)) return null;
-  return (min * 60) + sec + (ms / 1000);
-};
-
-export const normalizeMeaningPayload = (payload) => {
-  if (!payload || typeof payload !== 'object') return null;
-
-  const timeline = Array.isArray(payload.timeline_meanings)
-    ? payload.timeline_meanings
-      .map((item) => {
-        if (!item || typeof item !== 'object') return null;
-        const start = typeof item.start === 'string' ? item.start.trim() : '';
-        const end = typeof item.end === 'string' ? item.end.trim() : '';
-        const startSec = parseMeaningTimeToSec(start);
-        const endSec = parseMeaningTimeToSec(end);
-        return {
-          start,
-          end,
-          startSec,
-          endSec,
-          label: typeof item.label === 'string' ? item.label.trim() : '',
-          summary: typeof item.summary === 'string' ? item.summary.trim() : '',
-          detail: typeof item.detail === 'string' ? item.detail.trim() : '',
-          emotion: Array.isArray(item.emotion) ? item.emotion.map(v => String(v || '').trim()).filter(Boolean) : [],
-          keywords: Array.isArray(item.keywords) ? item.keywords.map(v => String(v || '').trim()).filter(Boolean) : [],
-        };
-      })
-      .filter(Boolean)
-    : [];
-
-  const finalSummaryRaw = payload.final_summary && typeof payload.final_summary === 'object'
-    ? payload.final_summary
-    : {};
-
-  const finalSummary = {
-    short: typeof finalSummaryRaw.short === 'string' ? finalSummaryRaw.short.trim() : '',
-    long: typeof finalSummaryRaw.long === 'string' ? finalSummaryRaw.long.trim() : '',
-  };
-
-  const hasSummary = !!(finalSummary.short || finalSummary.long);
-  if (!timeline.length && !hasSummary) return null;
-
-  return {
-    title: typeof payload.title === 'string' ? payload.title.trim() : '',
-    timeline_meanings: timeline,
-    final_summary: finalSummary,
-  };
-};
-
-export const parseMeaningPayload = (text) => {
-  const raw = String(text || '').replace(/^\uFEFF/, '').trim();
-  if (!raw) return null;
-
-  const candidates = [];
-  candidates.push(raw);
-
-  const fenceMatch = raw.match(/```(?:json|txt|text)?\s*([\s\S]*?)```/i);
-  if (fenceMatch && fenceMatch[1]) {
-    candidates.push(fenceMatch[1].trim());
-  }
-
-  const firstBrace = raw.indexOf('{');
-  const lastBrace = raw.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    candidates.push(raw.slice(firstBrace, lastBrace + 1).trim());
-  }
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    try {
-      const parsed = JSON.parse(candidate);
-      const normalized = normalizeMeaningPayload(parsed);
-      if (normalized) return normalized;
-    } catch (e) {
-    }
-  }
-
-  return null;
-};
-
-export const fetchGithubMeaning = async (video_id, bust) => {
-  if (!video_id) return null;
-  const base = `https://raw.githubusercontent.com/LRCHub/${video_id}/main`;
-  const urls = [`${base}/EX.txt`, `${base}/ex.txt`];
-
-  for (const url of urls) {
-    try {
-      const res = await fetch(typeof bust === 'function' ? bust(url) : withRandomCacheBuster(url), { cache: 'no-store' });
-      if (!res.ok) continue;
-      const text = await res.text();
-      const parsed = parseMeaningPayload(text);
-      if (parsed) return parsed;
-    } catch (e) {
-    }
-  }
-
-  return null;
-};
-
-export const fetchFromGithub = (video_id) => {
-  if (!video_id) return Promise.resolve({ lyrics: '', dynamicLines: null, subLyrics: '', candidates: [], meaningData: null });
-
-  const base = `https://raw.githubusercontent.com/LRCHub/${video_id}/main`;
-  const __cacheBuster = (1000 + Math.floor(Math.random() * 9000));
-  const bust = (url) => withRandomCacheBuster(url, __cacheBuster);
-
-  const safeFetchText = async (url) => {
-    try {
-      const r = await fetch(bust(url), { cache: 'no-store' });
-      if (!r.ok) return '';
-      return (await r.text()) || '';
-    } catch (e) {
-      return '';
-    }
-  };
-
-  const pSub = safeFetchText(`${base}/sub.txt`);
-  const pSelectCandidates = fetchGithubSelectCandidates(video_id, bust);
-  const pMeaning = fetchGithubMeaning(video_id, bust);
-
-  const parseLrcTimeToMs = (ts) => {
-    const s = String(ts || '').trim();
-    const m = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
-    if (!m) return null;
-    const mm = parseInt(m[1], 10);
-    const ss = parseInt(m[2], 10);
-    let frac = m[3] || '0';
-    if (frac.length === 1) frac = frac + '00';
-    else if (frac.length === 2) frac = frac + '0';
-    const ms = parseInt(frac.slice(0, 3), 10);
-    if (!Number.isFinite(mm) || !Number.isFinite(ss) || !Number.isFinite(ms)) return null;
-    return (mm * 60 + ss) * 1000 + ms;
-  };
-
-  const parseDynamicLrc = (text) => {
-    const out = [];
-    if (!text) return out;
-    const rows = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-    const parsed = [];
-    for (const raw of rows) {
-      const line = raw.trimEnd();
-      if (!line) continue;
-      const m = line.match(/^\[(\d+:\d{2}(?:\.\d{1,3})?)\]\s*(.*)$/);
-      if (!m) continue;
-      parsed.push({ lineMs: parseLrcTimeToMs(m[1]), rest: m[2] || '' });
-    }
-
-    const pushDistributed = (chars, chunk, startMs, endMs) => {
-      if (!chunk) return;
-      const arr = Array.from(chunk);
-      const n = arr.length;
-      if (!n) return;
-      const s = (typeof startMs === 'number') ? startMs : null;
-      const e = (typeof endMs === 'number') ? endMs : null;
-      if (s == null) {
-        for (const ch of arr) chars.push({ t: 0, c: ch });
-        return;
-      }
-      if (e == null || e <= s) {
-        for (const ch of arr) chars.push({ t: s, c: ch });
-        return;
-      }
-      const dur = Math.max(1, e - s);
-      const step = dur / n;
-      for (let i = 0; i < n; i++) chars.push({ t: s + Math.floor(step * i), c: arr[i] });
-    };
-
-    for (let li = 0; li < parsed.length; li++) {
-      const { lineMs, rest } = parsed[li];
-      const nextLineMs = (li + 1 < parsed.length && typeof parsed[li + 1].lineMs === 'number') ? parsed[li + 1].lineMs : null;
-      const tagRe = /<(\d+:\d{2}(?:\.\d{1,3})?)>/g;
-      const chars = [];
-      let prevMs = null;
-      let prevEnd = 0;
-
-      while (true) {
-        const mm = tagRe.exec(rest);
-        if (!mm) break;
-        const tagMs = parseLrcTimeToMs(mm[1]);
-        if (prevMs == null && tagMs != null && mm.index > prevEnd) {
-          pushDistributed(chars, rest.slice(prevEnd, mm.index), tagMs, tagMs);
-        }
-        if (prevMs != null) {
-          pushDistributed(chars, rest.slice(prevEnd, mm.index), prevMs, tagMs);
-        }
-        prevMs = tagMs;
-        prevEnd = mm.index + mm[0].length;
-      }
-
-      if (prevMs != null) {
-        let endMs = nextLineMs;
-        if (typeof endMs !== 'number') endMs = prevMs + 1500;
-        if (endMs <= prevMs) endMs = prevMs + 200;
-        pushDistributed(chars, rest.slice(prevEnd), prevMs, endMs);
-      }
-
-      out.push({
-        startTimeMs: (typeof lineMs === 'number' ? lineMs : (chars.length ? chars[0].t : 0)),
-        text: chars.map(c => c.c).join(''),
-        chars,
-      });
-    }
-
-    return out;
-  };
-
-  const buildLrcFromDynamic = (lines) => {
-    if (!Array.isArray(lines) || !lines.length) return '';
-    return lines.map((line) => {
-      let ms = null;
-      if (typeof line.startTimeMs === 'number') ms = line.startTimeMs;
-      else if (typeof line.startTimeMs === 'string') {
-        const n = Number(line.startTimeMs);
-        if (!Number.isNaN(n)) ms = n;
-      } else if (Array.isArray(line.chars) && line.chars.length) {
-        const ts = line.chars.map(c => (typeof c.t === 'number' ? c.t : null)).filter(v => v != null);
-        if (ts.length) ms = Math.min(...ts);
-      }
-      if (ms == null) return null;
-
-      let textLine = '';
-      if (typeof line.text === 'string' && line.text.length) textLine = line.text;
-      else if (Array.isArray(line.chars)) textLine = line.chars.map(c => c.c || c.text || c.caption || '').join('');
-      textLine = String(textLine ?? '');
-      const timeTag = `[${formatLrcTime(ms / 1000)}]`;
-      return textLine ? `${timeTag} ${textLine}` : timeTag;
-    }).filter(Boolean).join('\n').trimEnd();
-  };
-
-  const extractLyricsFromReadme = (text) => {
-    if (!text) return '';
-    const m = String(text).match(/```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```/);
-    const body = m ? m[1] : String(text);
-    return body
-      .split('\n')
-      .filter(line => !line.trim().startsWith('#'))
-      .filter(line => !line.trim().startsWith('>'))
-      .filter(line => !line.trim().startsWith('```'))
-      .filter(line => !line.includes('歌詞登録ステータス'))
-      .join('\n')
-      .trim();
-  };
-
-  return (async () => {
-    const [subLyrics, selectCandidates, meaningData] = await Promise.all([pSub, pSelectCandidates, pMeaning]);
-
-    const dynText = await safeFetchText(`${base}/Dynamic.lrc`);
-    const dynLines = parseDynamicLrc(dynText);
-    if (dynLines && dynLines.length) {
-      const lyrics = buildLrcFromDynamic(dynLines);
-      if (lyrics && lyrics.trim()) return { lyrics, dynamicLines: dynLines, subLyrics: subLyrics || '', candidates: selectCandidates || [], meaningData: meaningData || null };
-    }
-
-    const readme = await safeFetchText(`${base}/README.md`);
-    const lyrics = extractLyricsFromReadme(readme);
-
-    return { lyrics: lyrics || '', dynamicLines: null, subLyrics: subLyrics || '', candidates: selectCandidates || [], meaningData: meaningData || null };
-  })();
-};;
 
 export const extractVideoIdFromUrl = (youtube_url) => {
   if (!youtube_url) return null;
@@ -806,21 +252,3 @@ export const withTimeout = (promise, ms, label) => {
     }),
   ]);
 };
-export async function fetchCommunityRemaining() {
-  let lastErr = null;
-  for (const url of COMMUNITY_REMAINING_ENDPOINTS) {
-    try {
-      const res = await withTimeout(fetch(url, { method: 'GET', cache: 'no-store' }), 20000, 'community remaining timeout');
-      if (!res.ok) {
-        const msg = await res.text().catch(() => res.statusText);
-        throw new Error(`community remaining failed: ${res.status} ${msg}`);
-      }
-      const data = await res.json().catch(() => null);
-      if (!data || typeof data !== 'object') throw new Error('community remaining: invalid json');
-      return data;
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error('community remaining failed');
-}

@@ -31,6 +31,7 @@
     _prefetchLyrics: function (meta) {
       const title = (meta && meta.title) ? String(meta.title).trim() : '';
       const artist = (meta && meta.artist) ? String(meta.artist).trim() : '';
+      const videoId = (meta && meta.videoId) ? String(meta.videoId).trim() : '';
       if (!title) return;
 
       const key = `${title}///${artist}`;
@@ -43,9 +44,6 @@
       this._prefetchLastAt.set(key, now);
       this._prefetchInFlight.add(key);
 
-      const videoId = meta && meta.videoId ? meta.videoId : null;
-      const youtubeUrl = meta && meta.youtubeUrl ? meta.youtubeUrl : (videoId ? `https://youtu.be/${videoId}` : null);
-
       console.log('[Queue] Prefetch(next) lyrics:', title, '/', artist);
 
       chrome.runtime.sendMessage({
@@ -53,7 +51,6 @@
         payload: {
           track: title,
           artist: artist,
-          youtube_url: youtubeUrl,
           video_id: videoId,
         }
       }, (res) => {
@@ -344,4 +341,3 @@
       });
     }
   };
-

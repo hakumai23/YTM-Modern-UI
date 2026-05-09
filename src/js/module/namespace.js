@@ -147,17 +147,12 @@
 
   let config = {
     deepLKey: null,
-    useTrans: true,
     mode: true,
-    mainLang: 'original',
-    subLang: 'en',
     uiLang: 'ja',
     syncOffset: 0,
     saveSyncOffset: false,
-    useSharedTranslateApi: false,
     leftAlignInfo: false,
-    appleBg: true,
-    useLrcLibFallback: true
+    appleBg: true
   };
 
   // フォールバック言語
@@ -182,16 +177,11 @@
       replay_lyrics_heard: "累計行数",
       settings_title: "設定",
       settings_ui_lang: "UI言語 / Language",
-      settings_trans: "歌詞翻訳機能を使う",
-      settings_shared_trans: "共有翻訳を使う（APIキー不要）",
-      settings_main_lang: "メイン言語 (大きく表示)",
-      settings_sub_lang: "サブ言語 (小さく表示)",
       settings_save: "保存",
       settings_reset: "リセット",
       settings_saved: "設定を保存しました",
       settings_sync_offset: "歌詞同期オフセット",
       settings_sync_offset_save: "曲が切り替わったときにオフセットをリセットしない",
-      settings_fast_mode: "高速読み込みモード (既にデータベースにある曲のみ取得出来ます。自動登録は無効です。)",
       settings_left_align: "タイトルとアーティスト名を左揃えにする",
       settings_apple_bg: "Apple Music風の動的背景を使用する"
     },
@@ -215,16 +205,11 @@
       replay_lyrics_heard: "Total lines",
       settings_title: "Settings",
       settings_ui_lang: "UI Language / Language",
-      settings_trans: "Enable lyrics translation",
-      settings_shared_trans: "Use shared translation (no API key required)",
-      settings_main_lang: "Main language (large)",
-      settings_sub_lang: "Sub language (small)",
       settings_save: "Save",
       settings_reset: "Reset",
       settings_saved: "Settings saved",
       settings_sync_offset: "Lyrics sync offset",
       settings_sync_offset_save: "Don't reset offset when the song changes",
-      settings_fast_mode: "Fast Load Mode (May reduce accuracy for covers)",
       settings_left_align: "Left align title and artist name",
       settings_apple_bg: "Use Apple Music style dynamic background"
     },
@@ -248,16 +233,11 @@
       replay_lyrics_heard: "누적 행 수",
       settings_title: "설정",
       settings_ui_lang: "UI 언어 / Language",
-      settings_trans: "가사 번역 기능 사용",
-      settings_shared_trans: "공유 번역 사용 (API 키 불필요)",
-      settings_main_lang: "메인 언어 (크게 표시)",
-      settings_sub_lang: "서브 언어 (작게 표시)",
       settings_save: "저장",
       settings_reset: "초기화",
       settings_saved: "설정을 저장했습니다",
       settings_sync_offset: "가사 동기 오프셋",
       settings_sync_offset_save: "곡이 바뀌어도 오프셋을 초기화하지 않기",
-      settings_fast_mode: "고속 로딩 모드"
     },
     zh: {
       unit_hour: "小时",
@@ -279,16 +259,11 @@
       replay_lyrics_heard: "累计行数",
       settings_title: "设置",
       settings_ui_lang: "UI 语言 / Language",
-      settings_trans: "启用歌词翻译",
-      settings_shared_trans: "使用共享翻译（无需 API 密钥）",
-      settings_main_lang: "主语言（大号显示）",
-      settings_sub_lang: "副语言（小号显示）",
       settings_save: "保存",
       settings_reset: "重置",
       settings_saved: "已保存设置",
       settings_sync_offset: "歌词同步偏移",
       settings_sync_offset_save: "切歌时不重置偏移",
-      settings_fast_mode: "快速加载模式"
     }
   }; 
   

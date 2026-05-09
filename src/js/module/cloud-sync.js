@@ -427,21 +427,12 @@
 
   let lyricsRequests = null;
   let lyricsConfig = null;
-  let lyricsMeaning = null;
-  let meaningPanelVisible = false;
-  let activeMeaningIndex = -1;
-
   const ui = {
     bg: null,
     wrapper: null,
     title: null, artist: null, artwork: null,
     lyrics: null, input: null, settings: null,
     btnArea: null, uploadMenu: null, deleteDialog: null,
-    meaningPanel: null,
-    meaningBtn: null,
-    summaryBtn: null,
-    meaningSummaryBackdrop: null,
-    meaningSummaryDialog: null,
     replayPanel: null,
     queuePanel: null,
     settingsBtn: null,
@@ -453,7 +444,6 @@
   let uploadMenuGlobalSetup = false;
   let deleteDialogGlobalSetup = false;
   let settingsOutsideClickSetup = false;
-  let meaningSummaryGlobalSetup = false;
   let toastTimer = null;
   let moviemode = null;
   let movieObserver = null;
@@ -475,8 +465,6 @@
     if (playerBar) targets.push(playerBar);
     if (switcher) targets.push(switcher);
     if (ui.btnArea) targets.push(ui.btnArea);
-    if (ui.meaningPanel && ui.meaningPanel.classList.contains('active')) targets.push(ui.meaningPanel);
-    if (ui.meaningSummaryDialog && ui.meaningSummaryDialog.classList.contains('visible')) targets.push(ui.meaningSummaryDialog);
     targets.forEach(element => {
       element.classList.remove('inactive');
     });
@@ -485,9 +473,7 @@
       const isSettingsActive = ui.settings?.classList.contains('active');
       const isReplayActive = ui.replayPanel?.classList.contains('active');
       const isQueueActive = ui.queuePanel?.matches(':hover');
-      const isMeaningActive = ui.meaningPanel?.classList.contains('active') && ui.meaningPanel?.matches(':hover');
-      const isSummaryActive = ui.meaningSummaryDialog?.classList.contains('visible');
-      if (!isSettingsActive && !isReplayActive && !isQueueActive && !isMeaningActive && !isSummaryActive && !targets.some(target => target?.matches(':hover'))) {
+      if (!isSettingsActive && !isReplayActive && !isQueueActive && !targets.some(target => target?.matches(':hover'))) {
         targets.forEach(element => {
           element.classList.add('inactive');
         });

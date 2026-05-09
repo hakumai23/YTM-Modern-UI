@@ -152,7 +152,6 @@ const forceStyle = pipDoc.createElement('style');
         .lyric-line.active .lyric-char.char-pending { opacity: 0.25 !important; }
         .lyric-line.active .lyric-char.char-active { opacity: 1 !important; }
         
-        .lyric-translation { font-size: 0.6em; opacity: 0.5; font-weight: 600; margin-top: 4px; display: block; }
         
         body.ytm-no-timestamp .lyric-line { 
           color: #fff !important; 
