@@ -284,6 +284,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
       const sendHubLyrics = (hubRes, sourceLabel) => {
         const candidates = Array.isArray(hubRes.candidates) ? hubRes.candidates : [];
+        const meaningData = hubRes.meaningData || API.normalizeLrchubMeaningPayload(hubRes);
         console.log(`[BG] Won: ${sourceLabel}`);
         sendOnce({
           success: true,
@@ -294,8 +295,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           candidates,
           config: hubRes.config || null,
           requests: hubRes.requests || [],
-          meaningData: hubRes.explanations || null,
-          songSummary: hubRes.song_summary || null,
+          meaningData,
+          songSummary: hubRes.songSummary || hubRes.song_summary || hubRes.final_summary || null,
+          comments: Array.isArray(hubRes.comments) ? hubRes.comments : [],
+          rating: hubRes.rating || null,
           translations: hubRes.translations || null,
           lrcMap: {
             ...API.normalizeLrchubTranslations(hubRes.lrc_map),
@@ -399,6 +402,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             success: true,
             lyrics: candRes.lyrics,
             dynamicLines: candRes.dynamicLines || null,
+            meaningData: candRes.meaningData || API.normalizeLrchubMeaningPayload(candRes),
+            songSummary: candRes.songSummary || candRes.song_summary || candRes.final_summary || null,
+            comments: Array.isArray(candRes.comments) ? candRes.comments : [],
+            rating: candRes.rating || null,
             translations: candRes.translations || null,
             lrcMap: {
               ...API.normalizeLrchubTranslations(candRes.lrc_map),
@@ -500,33 +507,6 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     return true;
   }
 
-  if (req.type === 'SHARE_REGISTER') {
-    const { youtube_url, video_id, phrase, text, lang, time_ms, time_sec } = req.payload || {};
-    const body = {};
-    if (youtube_url) body.youtube_url = youtube_url;
-    else if (video_id) body.video_id = video_id;
-    if (phrase || text) body.phrase = phrase || text;
-    if (lang) body.lang = lang;
-    if (typeof time_ms === 'number') body.time_ms = time_ms;
-    else if (typeof time_sec === 'number') body.time_sec = time_sec;
-
-    if ((!body.youtube_url && !body.video_id) || !body.phrase) {
-      sendResponse({ success: false, error: 'missing params' });
-      return;
-    }
-
-    fetch(`https://lrchub.coreone.work/api/share/register?_=${API.getCacheBuster()}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-      .then(r => r.json())
-      .then(json => {
-        sendResponse({ success: !!json.ok, data: json });
-      })
-      .catch(err => sendResponse({ success: false, error: err.toString() }));
-    return true;
-  }
 });
 
 self.addEventListener('fetch', (event) => {

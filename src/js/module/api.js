@@ -182,6 +182,37 @@ export const normalizeLrchubTranslations = (translations) => {
   return lrcMap;
 };
 
+export const normalizeLrchubMeaningPayload = (res) => {
+  if (!res || typeof res !== 'object') return null;
+
+  const explanations = Array.isArray(res.explanations)
+    ? res.explanations
+    : (Array.isArray(res.timeline_meanings) ? res.timeline_meanings : []);
+  const songSummary = (
+    (res.song_summary && typeof res.song_summary === 'object') ? res.song_summary :
+    (res.songSummary && typeof res.songSummary === 'object') ? res.songSummary :
+    null
+  );
+  const finalSummary = (res.final_summary && typeof res.final_summary === 'object') ? res.final_summary : null;
+  const comments = Array.isArray(res.comments) ? res.comments : [];
+  const rating = (res.rating && typeof res.rating === 'object') ? res.rating : null;
+
+  if (!explanations.length && !songSummary && !finalSummary && !comments.length && !rating) {
+    return null;
+  }
+
+  return {
+    title: res.display_name || res.title || res.track || '',
+    track: res.track || res.title || '',
+    artist: res.artist || res.artist_name || '',
+    explanations,
+    song_summary: songSummary,
+    final_summary: finalSummary,
+    comments,
+    rating,
+  };
+};
+
 export const normalizeLrchubLyricsResponse = (res) => {
   if (!res || typeof res !== 'object') return null;
 
@@ -222,6 +253,8 @@ export const normalizeLrchubLyricsResponse = (res) => {
     ...res,
     lyrics: String(lyrics || '').trim(),
     dynamicLines,
+    meaningData: normalizeLrchubMeaningPayload(res),
+    songSummary: res.song_summary || res.songSummary || res.final_summary || null,
     lrcMap: {
       ...normalizeLrchubTranslations(res.lrc_map),
       ...normalizeLrchubTranslations(res.lrcMap),

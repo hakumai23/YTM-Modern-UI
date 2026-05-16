@@ -420,9 +420,6 @@
 
   let isFirstSongDetected = true;
 
-  let shareMode = false;
-  let shareStartIndex = null;
-  let shareEndIndex = null;
   let isFallbackLyrics = false;
 
   let lyricsRequests = null;
@@ -445,8 +442,7 @@
     replayPanel: null,
     queuePanel: null,
     settingsBtn: null,
-    lyricsBtn: null,
-    shareBtn: null
+    lyricsBtn: null
   };
 
   let hideTimer = null;

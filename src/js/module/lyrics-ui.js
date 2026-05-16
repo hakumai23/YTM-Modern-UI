@@ -1282,8 +1282,9 @@
       }
 
       // candidates/config が更新されたらメニューを再描画
-      if (p.meaningData) {
-        setLyricsMeaningData(p.meaningData);
+      const incomingMeaningData = normalizeMeaningPayloadLocal(p);
+      if (incomingMeaningData) {
+        setLyricsMeaningData(incomingMeaningData);
         persistMeaningDataToCurrentCache().catch(() => { });
         if (meaningPanelVisible) syncMeaningPanelToPlayback(true);
       }
@@ -1326,6 +1327,10 @@
     .replace(/'/g, '&#39;');
 
   const parseMeaningTimeToSecLocal = (value) => {
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return null;
+      return value > 10000 ? value / 1000 : value;
+    }
     const s = String(value || '').trim();
     const m = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
     if (!m) return null;
@@ -1339,51 +1344,138 @@
     return (min * 60) + sec + (ms / 1000);
   };
 
+  const formatMeaningTimeLocal = (seconds) => {
+    if (typeof seconds !== 'number' || Number.isNaN(seconds)) return '';
+    const total = Math.max(0, seconds);
+    const min = Math.floor(total / 60);
+    const sec = Math.floor(total - min * 60);
+    const cs = Math.floor((total - min * 60 - sec) * 100);
+    return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+  };
+
+  const normalizeMeaningStringListLocal = (value) => {
+    if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean);
+    if (typeof value === 'string') return value.split(/[,\n]/).map(v => v.trim()).filter(Boolean);
+    return [];
+  };
+
+  const normalizeMeaningSourceLocal = (payload) => {
+    if (!payload) return null;
+    if (Array.isArray(payload)) return { explanations: payload };
+    if (typeof payload !== 'object') return null;
+
+    const rawMeaningData = payload.meaningData;
+    if (!rawMeaningData) return payload;
+
+    const meaningData = Array.isArray(rawMeaningData)
+      ? { explanations: rawMeaningData }
+      : (typeof rawMeaningData === 'object' ? rawMeaningData : {});
+
+    return {
+      ...payload,
+      ...meaningData,
+      explanations: Array.isArray(meaningData.explanations)
+        ? meaningData.explanations
+        : (Array.isArray(payload.explanations) ? payload.explanations : []),
+      timeline_meanings: Array.isArray(meaningData.timeline_meanings)
+        ? meaningData.timeline_meanings
+        : (Array.isArray(payload.timeline_meanings) ? payload.timeline_meanings : []),
+      song_summary: meaningData.song_summary || meaningData.songSummary || payload.song_summary || payload.songSummary || null,
+      final_summary: meaningData.final_summary || payload.final_summary || null,
+      comments: Array.isArray(meaningData.comments) ? meaningData.comments : (Array.isArray(payload.comments) ? payload.comments : []),
+      rating: meaningData.rating || payload.rating || null,
+    };
+  };
+
+  const normalizeMeaningCommentsLocal = (comments) => {
+    if (!Array.isArray(comments)) return [];
+    return comments
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const body = String(item.body || item.comment || item.text || '').trim();
+        if (!body) return null;
+        return {
+          body,
+          contributorName: String(item.contributor_name || item.contributorName || item.user || item.name || '').trim(),
+          createdAt: String(item.created_at || item.createdAt || '').trim(),
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const normalizeMeaningRatingLocal = (rating) => {
+    if (!rating || typeof rating !== 'object') return null;
+    const average = Number(rating.average ?? rating.avg ?? rating.score);
+    const count = Number(rating.count ?? rating.total ?? rating.votes);
+    const hasAverage = Number.isFinite(average);
+    const hasCount = Number.isFinite(count);
+    if (!hasAverage && !hasCount) return null;
+    return {
+      average: hasAverage ? average : null,
+      count: hasCount ? count : null,
+    };
+  };
+
   const normalizeMeaningPayloadLocal = (payload) => {
-    if (!payload || typeof payload !== 'object') return null;
+    const source = normalizeMeaningSourceLocal(payload);
+    if (!source || typeof source !== 'object') return null;
 
     // Handle new LRCHub "explanations" format
-    const rawTimeline = Array.isArray(payload.explanations) ? payload.explanations : (Array.isArray(payload.timeline_meanings) ? payload.timeline_meanings : []);
+    const rawTimeline = Array.isArray(source.explanations) ? source.explanations : (Array.isArray(source.timeline_meanings) ? source.timeline_meanings : []);
 
     const timeline = rawTimeline
       .map((item) => {
         if (!item || typeof item !== 'object') return null;
         
         // Map from either new LRCHub spec or old spec
-        const start = String(item.start_time || item.start || '').trim();
-        const end = String(item.end_time || item.end || '').trim();
+        const startRaw = String(item.start_time || item.start || '').trim();
+        const endRaw = String(item.end_time || item.end || '').trim();
         
-        const startSec = (typeof item.start_ms === 'number') ? item.start_ms / 1000 : parseMeaningTimeToSecLocal(start);
-        const endSec = (typeof item.end_ms === 'number') ? item.end_ms / 1000 : parseMeaningTimeToSecLocal(end);
+        const startSec = (typeof item.start_ms === 'number') ? item.start_ms / 1000 : parseMeaningTimeToSecLocal(item.start_sec ?? item.startSec ?? startRaw);
+        const endSec = (typeof item.end_ms === 'number') ? item.end_ms / 1000 : parseMeaningTimeToSecLocal(item.end_sec ?? item.endSec ?? endRaw);
+        const start = startRaw || formatMeaningTimeLocal(startSec);
+        const end = endRaw || formatMeaningTimeLocal(endSec);
 
         return {
           start,
           end,
           startSec,
           endSec,
-          label: String(item.lyrics || item.label || '').trim(),
-          summary: String(item.summary || '').trim(),
-          detail: String(item.meaning || item.detail || '').trim(),
-          emotion: Array.isArray(item.emotion) ? item.emotion.map(v => String(v || '').trim()).filter(Boolean) : [],
-          keywords: Array.isArray(item.keywords) ? item.keywords.map(v => String(v || '').trim()).filter(Boolean) : [],
+          label: String(item.lyrics || item.label || item.text || '').trim(),
+          summary: String(item.summary || item.synopsis || '').trim(),
+          detail: String(item.meaning || item.detail || item.explanation || item.description || '').trim(),
+          emotion: normalizeMeaningStringListLocal(item.emotion || item.emotions || item.mood),
+          keywords: normalizeMeaningStringListLocal(item.keywords || item.keyword),
         };
       })
-      .filter(Boolean);
+      .filter(item => item && (item.label || item.summary || item.detail));
 
-    const finalSummaryRaw = payload.final_summary && typeof payload.final_summary === 'object'
-      ? payload.final_summary
+    const songSummaryRaw = source.song_summary && typeof source.song_summary === 'object'
+      ? source.song_summary
+      : (source.songSummary && typeof source.songSummary === 'object' ? source.songSummary : {});
+    const finalSummaryRaw = source.final_summary && typeof source.final_summary === 'object'
+      ? source.final_summary
       : {};
+    const synopsis = String(songSummaryRaw.synopsis || finalSummaryRaw.synopsis || '').trim();
+    const message = String(songSummaryRaw.message || finalSummaryRaw.message || '').trim();
+    const summaryText = String(songSummaryRaw.summary || finalSummaryRaw.summary || '').trim();
+    const longSummaryParts = [synopsis, message, summaryText].filter(Boolean);
     const finalSummary = {
-      short: typeof finalSummaryRaw.short === 'string' ? finalSummaryRaw.short.trim() : '',
-      long: typeof finalSummaryRaw.long === 'string' ? finalSummaryRaw.long.trim() : '',
+      short: String(finalSummaryRaw.short || synopsis || message || summaryText || '').trim(),
+      long: String(finalSummaryRaw.long || longSummaryParts.join('\n\n') || finalSummaryRaw.short || '').trim(),
     };
+    const comments = normalizeMeaningCommentsLocal(source.comments);
+    const rating = normalizeMeaningRatingLocal(source.rating);
 
-    if (!timeline.length && !finalSummary.short && !finalSummary.long) return null;
+    if (!timeline.length && !finalSummary.short && !finalSummary.long && !comments.length && !rating) return null;
 
     return {
-      title: typeof payload.title === 'string' ? payload.title.trim() : '',
+      title: String(source.display_name || source.title || source.track || '').trim(),
       timeline_meanings: timeline,
       final_summary: finalSummary,
+      song_summary: { synopsis, message, summary: summaryText },
+      comments,
+      rating,
     };
   };
 
@@ -1480,6 +1572,50 @@
     return `<div class="ytm-meaning-chip-group"><div class="ytm-meaning-chip-label">${escapeHtml(label)}</div><div class="ytm-meaning-chip-list">${chips}</div></div>`;
   };
 
+  const buildMeaningRatingHtml = () => {
+    const rating = lyricsMeaning && lyricsMeaning.rating;
+    if (!rating) return '';
+    const average = typeof rating.average === 'number' ? rating.average.toFixed(1) : '--';
+    const count = typeof rating.count === 'number' ? `${rating.count}件` : '';
+    return `<div class="ytm-meaning-rating"><span>★ ${escapeHtml(average)}</span>${count ? `<span>${escapeHtml(count)}</span>` : ''}</div>`;
+  };
+
+  const buildMeaningSummarySectionsHtml = () => {
+    const summary = (lyricsMeaning && lyricsMeaning.song_summary) || {};
+    const sections = [
+      ['あらすじ', summary.synopsis],
+      ['メッセージ', summary.message],
+      ['まとめ', summary.summary],
+    ].filter(([, text]) => String(text || '').trim());
+
+    return sections.map(([label, text]) => `
+      <section class="ytm-meaning-summary-section">
+        <div class="ytm-meaning-summary-section-label">${escapeHtml(label)}</div>
+        <p>${escapeHtml(text)}</p>
+      </section>
+    `).join('');
+  };
+
+  const buildMeaningCommentsHtml = () => {
+    const comments = lyricsMeaning && Array.isArray(lyricsMeaning.comments) ? lyricsMeaning.comments : [];
+    if (!comments.length) return '';
+    const items = comments.slice(0, 5).map((comment) => {
+      const meta = [comment.contributorName, comment.createdAt].filter(Boolean).join(' / ');
+      return `
+        <div class="ytm-meaning-comment">
+          <p>${escapeHtml(comment.body)}</p>
+          ${meta ? `<div class="ytm-meaning-comment-meta">${escapeHtml(meta)}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+    return `
+      <section class="ytm-meaning-comments">
+        <div class="ytm-meaning-summary-section-label">コメント</div>
+        ${items}
+      </section>
+    `;
+  };
+
   const getMeaningDisplayTitle = () => {
     const raw = (lyricsMeaning && lyricsMeaning.title) || ui.title?.textContent || 'Song Meaning';
     return String(raw || 'Song Meaning').trim();
@@ -1538,6 +1674,9 @@
         </div>
         <div class="ytm-meaning-panel-body">
           <p class="ytm-meaning-panel-text">${escapeHtml(fallbackText)}</p>
+          ${buildMeaningSummarySectionsHtml()}
+          ${buildMeaningRatingHtml()}
+          ${buildMeaningCommentsHtml()}
         </div>
       `;
       activeMeaningIndex = -1;
@@ -1556,6 +1695,7 @@
           ${segment.detail ? `<p class="ytm-meaning-panel-text">${escapeHtml(segment.detail)}</p>` : ''}
           ${buildMeaningChipGroup('感情', segment.emotion, 'emotion')}
           ${buildMeaningChipGroup('キーワード', segment.keywords, 'keyword')}
+          ${buildMeaningRatingHtml()}
         </div>
       `;
       activeMeaningIndex = normalizedIndex;
@@ -1653,13 +1793,16 @@
     const summary = lyricsMeaning.final_summary || {};
     const shortText = summary.short || '';
     const longText = summary.long || shortText || 'この曲の要約データはまだありません。';
+    const structuredSummaryHtml = buildMeaningSummarySectionsHtml();
 
     ui.meaningSummaryDialog.innerHTML = `
       <button class="ytm-meaning-summary-close" type="button" aria-label="Close">×</button>
       <div class="ytm-meaning-summary-eyebrow">要約</div>
       <div class="ytm-meaning-summary-title">${escapeHtml(getMeaningDisplayTitle())}</div>
+      ${buildMeaningRatingHtml()}
       ${shortText ? `<p class="ytm-meaning-summary-short">${escapeHtml(shortText)}</p>` : ''}
-      <p class="ytm-meaning-summary-long">${escapeHtml(longText)}</p>
+      ${structuredSummaryHtml || `<p class="ytm-meaning-summary-long">${escapeHtml(longText)}</p>`}
+      ${buildMeaningCommentsHtml()}
     `;
 
     const closeBtn = ui.meaningSummaryDialog.querySelector('.ytm-meaning-summary-close');
@@ -2313,6 +2456,10 @@ async function applyLyricsText(rawLyrics) {
       const next = {
         ...(cand || {}),
         lyrics: res.lyrics,
+        meaningData: res.meaningData || cand?.meaningData || null,
+        songSummary: res.songSummary || cand?.songSummary || null,
+        comments: Array.isArray(res.comments) ? res.comments : (Array.isArray(cand?.comments) ? cand.comments : []),
+        rating: res.rating || cand?.rating || null,
         translations: res.translations || cand?.translations || null,
         lrcMap: res.lrcMap || cand?.lrcMap || null,
         has_synced: typeof res.has_synced === 'boolean' ? res.has_synced : !!/\[\d+:\d{2}(?:\.\d{1,3})?\]/.test(res.lyrics)
@@ -2472,6 +2619,7 @@ async function applyLyricsText(rawLyrics) {
       ...normalizeTranslationsToLrcMapLocal(cand.lrcMap),
       ...normalizeTranslationsToLrcMapLocal(cand.translations)
     };
+    setLyricsMeaningData(cand);
     duetSubDynamicLines = null;
     _duetExcludedTimes = new Set();
     if (currentKey) {
@@ -2480,6 +2628,7 @@ async function applyLyricsText(rawLyrics) {
         dynamicLines: null,
         noLyrics: false,
         lrcMap: lyricsTranslationMap || null,
+        meaningData: lyricsMeaning || null,
         candidateId: cand.id || candId || null
       });
     }
@@ -3568,7 +3717,6 @@ function renderSettingsPanel() {
     const lyricsBtnConfig = { txt: 'Lyrics', cls: 'lyrics-btn', click: () => { } };
     const meaningBtnConfig = { txt: '解説', cls: 'meaning-btn', click: () => toggleMeaningPanel() };
     const summaryBtnConfig = { txt: '要約', cls: 'meaning-summary-btn', click: () => showMeaningSummaryPopup() };
-    const shareBtnConfig = { txt: 'Share', cls: 'share-btn', click: onShareButtonClick };
 
     //  PiPボタン
     const pipBtnConfig = {
@@ -3607,7 +3755,7 @@ function renderSettingsPanel() {
     };
 
     // ボタン配列に追加
-    btns.push(lyricsBtnConfig, meaningBtnConfig, summaryBtnConfig, shareBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
+    btns.push(lyricsBtnConfig, meaningBtnConfig, summaryBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
 
     btns.forEach(b => {
       const btn = createEl('button', '', `ytm-glass-btn ${b.cls || ''}`, b.txt);
@@ -3624,9 +3772,6 @@ function renderSettingsPanel() {
       if (b === summaryBtnConfig) {
         btn.id = 'ytm-meaning-summary-btn';
         ui.summaryBtn = btn;
-      }
-      if (b === shareBtnConfig) {
-        ui.shareBtn = btn;
       }
       if (b === switchBtnConfig) {
         btn.id = 'ytm-switch-btn';
@@ -3778,7 +3923,8 @@ function renderSettingsPanel() {
         };
         refreshCandidateMenu();
         refreshLockMenu();
-        if (res?.meaningData) setLyricsMeaningData(res.meaningData);
+        const nextMeaningData = normalizeMeaningPayloadLocal(res);
+        if (nextMeaningData) setLyricsMeaningData(nextMeaningData);
         if (typeof res?.subLyrics === 'string' && res.subLyrics.trim()) duetSubLyricsRaw = res.subLyrics;
 
         if (res?.success && typeof res.lyrics === 'string' && res.lyrics.trim()) {
@@ -4005,10 +4151,6 @@ const optimizeLineBreaks = (text) => {
       }
 
       row.onclick = () => {
-        if (shareMode) {
-          handleShareLineClick(index);
-          return;
-        }
         if (meaningPanelVisible && line && typeof line.time === 'number') {
           syncMeaningPanelToPlayback(true, line.time);
         }
@@ -4027,8 +4169,6 @@ const optimizeLineBreaks = (text) => {
         PipManager.pipWindow.document.body.classList.toggle('ytm-no-timestamp', !hasTimestamp);
       }
     }
-
-    updateShareSelectionHighlight();
   }
 
   const handleUpload = (e) => {
@@ -4287,199 +4427,6 @@ const optimizeLineBreaks = (text) => {
     }
   }
 
-  // ===================== Share 機能 =====================
-
-  function onShareButtonClick() {
-    if (!lyricsData.length) {
-      showToast('共有できる歌詞がありません');
-      return;
-    }
-    shareMode = !shareMode;
-    shareStartIndex = null;
-    shareEndIndex = null;
-    if (shareMode) {
-      document.body.classList.add('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.add('share-active');
-      showToast('共有したい歌詞の開始行と終了行をクリックしてください');
-    } else {
-      document.body.classList.remove('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.remove('share-active');
-    }
-    updateShareSelectionHighlight();
-  }
-
-  function handleShareLineClick(index) {
-    if (!shareMode) return;
-    if (!lyricsData.length) return;
-    if (shareStartIndex == null) {
-      shareStartIndex = index;
-      shareEndIndex = null;
-      updateShareSelectionHighlight();
-      return;
-    }
-    if (shareEndIndex == null) {
-      shareEndIndex = index;
-      updateShareSelectionHighlight();
-      finalizeShareSelection();
-      return;
-    }
-    shareStartIndex = index;
-    shareEndIndex = null;
-    updateShareSelectionHighlight();
-  }
-
-  function updateShareSelectionHighlight() {
-    if (!ui.lyrics) return;
-    const rows = ui.lyrics.querySelectorAll('.lyric-line');
-    rows.forEach(r => {
-      r.classList.remove('share-select');
-      r.classList.remove('share-select-range');
-      r.classList.remove('share-select-start');
-      r.classList.remove('share-select-end');
-    });
-    if (!shareMode || shareStartIndex == null || !lyricsData.length) return;
-    const max = lyricsData.length ? lyricsData.length - 1 : 0;
-    let s, e;
-    if (shareEndIndex == null) {
-      const idx = Math.max(0, Math.min(shareStartIndex, max));
-      s = idx;
-      e = idx;
-    } else {
-      const minIdx = Math.min(shareStartIndex, shareEndIndex);
-      const maxIdx = Math.max(shareStartIndex, shareEndIndex);
-      s = Math.max(0, Math.min(minIdx, max));
-      e = Math.max(0, Math.min(maxIdx, max));
-    }
-    for (let i = s; i <= e && i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-      row.classList.add('share-select-range');
-      if (i === s) row.classList.add('share-select-start');
-      if (i === e) row.classList.add('share-select-end');
-    }
-  }
-
-  function getShareSelectionInfo() {
-    if (!lyricsData.length || shareStartIndex == null) return null;
-    const max = lyricsData.length - 1;
-    let s, e;
-    if (shareEndIndex == null) {
-      const idx = Math.max(0, Math.min(shareStartIndex, max));
-      s = idx;
-      e = idx;
-    } else {
-      const minIdx = Math.min(shareStartIndex, shareEndIndex);
-      const maxIdx = Math.max(shareStartIndex, shareEndIndex);
-      s = Math.max(0, Math.min(minIdx, max));
-      e = Math.max(0, Math.min(maxIdx, max));
-    }
-    const parts = [];
-    for (let i = s; i <= e; i++) {
-      if (!lyricsData[i]) continue;
-      let t = (lyricsData[i].text || '').trim();
-      if (!t && lyricsData[i].translation) {
-        t = String(lyricsData[i].translation).trim();
-      }
-      if (t) parts.push(t);
-    }
-    const phrase = parts.join('\n');
-    let timeMs = 0;
-    if (hasTimestamp && lyricsData[s] && typeof lyricsData[s].time === 'number') {
-      timeMs = Math.round(lyricsData[s].time * 1000);
-    } else {
-      const v = document.querySelector('video');
-      if (v && typeof v.currentTime === 'number') {
-        timeMs = Math.round(v.currentTime * 1000);
-      }
-    }
-    return { phrase, timeMs };
-  }
-
-  function normalizeToHttps(url) {
-    if (!url) return url;
-    try {
-      const u = new URL(url, 'https://lrchub.coreone.work');
-      u.protocol = 'https:';
-      return u.toString();
-    } catch (e) {
-      if (url.startsWith('http://')) {
-        return 'https://' + url.slice(7);
-      }
-      return url;
-    }
-  }
-
-  function copyToClipboard(text) {
-    if (navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(text).catch(() => {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      });
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      return Promise.resolve();
-    }
-  }
-
-  async function finalizeShareSelection() {
-    const info = getShareSelectionInfo();
-    if (!info || !info.phrase) {
-      showToast('選択された歌詞が空です');
-      return;
-    }
-    const youtube_url = getCurrentVideoUrl();
-    const video_id = getCurrentVideoId();
-    const lang = (config.mainLang && config.mainLang !== 'original') ? config.mainLang : 'ja';
-    try {
-      const res = await new Promise(resolve => {
-        chrome.runtime.sendMessage(
-          { type: 'SHARE_REGISTER', payload: { youtube_url, video_id, phrase: info.phrase, lang, time_ms: info.timeMs } },
-          resolve
-        );
-      });
-      if (!res || !res.success) {
-        console.error('Share register failed:', res && res.error);
-        showToast('共有に失敗しました');
-        return;
-      }
-      let shareUrl = (res.data && res.data.share_url) || '';
-      shareUrl = normalizeToHttps(shareUrl);
-      if (!shareUrl && video_id) {
-        const sec = Math.round((info.timeMs || 0) / 1000);
-        shareUrl = `https://lrchub.coreone.work/s/${video_id}/${sec}`;
-      }
-      if (shareUrl) {
-        await copyToClipboard(shareUrl);
-        showToast('共有リンクをコピーしました');
-      } else {
-        showToast('共有リンクの取得に失敗しました');
-      }
-    } catch (e) {
-      console.error('Share register error', e);
-      showToast('共有に失敗しました');
-    } finally {
-      shareMode = false;
-      shareStartIndex = null;
-      shareEndIndex = null;
-      document.body.classList.remove('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.remove('share-active');
-      updateShareSelectionHighlight();
-    }
-  }
-
   async function sendLockRequest(requestId) {
     const youtube_url = getCurrentVideoUrl();
     const video_id = getCurrentVideoId();
@@ -4650,11 +4597,6 @@ const optimizeLineBreaks = (text) => {
       lyricsTranslationMap = {};
       setLyricsMeaningData(null);
       hideMeaningSummaryPopup();
-      shareMode = false;
-      shareStartIndex = null;
-      shareEndIndex = null;
-      document.body.classList.remove('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.remove('share-active');
       lastActiveIndex = -1;
       lastScrolledIndex = -1;
       isUserScrolling = false;
