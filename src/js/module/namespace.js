@@ -157,6 +157,7 @@
     useSharedTranslateApi: false,
     leftAlignInfo: false,
     appleBg: true,
+    useAnimatedCaptions: false,
     useLrcLibFallback: true
   };
 
@@ -192,7 +193,8 @@
       settings_sync_offset: "歌詞同期オフセット",
       settings_sync_offset_save: "曲が切り替わったときにオフセットをリセットしない",
       settings_left_align: "タイトルとアーティスト名を左揃えにする",
-      settings_apple_bg: "Apple Music風の動的背景を使用する"
+      settings_apple_bg: "Apple Music風の動的背景を使用する",
+      settings_animated_captions: "アニメーション字幕を使う"
     },
     en: {
       unit_hour: "hours",
@@ -224,7 +226,8 @@
       settings_sync_offset: "Lyrics sync offset",
       settings_sync_offset_save: "Don't reset offset when the song changes",
       settings_left_align: "Left align title and artist name",
-      settings_apple_bg: "Use Apple Music style dynamic background"
+      settings_apple_bg: "Use Apple Music style dynamic background",
+      settings_animated_captions: "Enable animated captions"
     },
     ko: {
       unit_hour: "시간",

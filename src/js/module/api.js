@@ -218,6 +218,14 @@ export const normalizeLrchubLyricsResponse = (res) => {
 
   let lyrics = '';
   let dynamicLines = null;
+  const animatedLyricsXml = [
+    res.animated_lyrics,
+    res.timedtext,
+    res.timed_text,
+    res.youtube_timedtext,
+    res.caption_xml,
+    res.captionXml
+  ].find(value => typeof value === 'string' && value.trim()) || '';
 
   const dynText = res.dynamic_lrc || res.dynamic_lyrics || res.dynamicLrc || res.dynamicLyrics;
   if (dynText) {
@@ -238,7 +246,8 @@ export const normalizeLrchubLyricsResponse = (res) => {
       res.lrc,
       res.plain_lyrics,
       res.plainLyrics,
-      res.text
+      res.text,
+      animatedLyricsXml
     ];
 
     for (const value of fields) {
@@ -252,6 +261,7 @@ export const normalizeLrchubLyricsResponse = (res) => {
   return {
     ...res,
     lyrics: String(lyrics || '').trim(),
+    animated_lyrics: String(animatedLyricsXml || '').trim(),
     dynamicLines,
     meaningData: normalizeLrchubMeaningPayload(res),
     songSummary: res.song_summary || res.songSummary || res.final_summary || null,

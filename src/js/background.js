@@ -289,6 +289,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         sendOnce({
           success: true,
           lyrics: hubRes.lyrics,
+          animated_lyrics: hubRes.animated_lyrics || hubRes.timedtext || hubRes.timed_text || null,
           dynamicLines: hubRes.dynamicLines || null,
           subLyrics: '',
           hasSelectCandidates: candidates.length > 1,
@@ -401,6 +402,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           sendResponse({
             success: true,
             lyrics: candRes.lyrics,
+            animated_lyrics: candRes.animated_lyrics || candRes.timedtext || candRes.timed_text || null,
             dynamicLines: candRes.dynamicLines || null,
             meaningData: candRes.meaningData || API.normalizeLrchubMeaningPayload(candRes),
             songSummary: candRes.songSummary || candRes.song_summary || candRes.final_summary || null,

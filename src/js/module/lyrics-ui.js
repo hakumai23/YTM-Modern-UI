@@ -708,6 +708,252 @@
 
     return found || null;
   };
+
+  let animatedCaptionData = null;
+  let animatedCaptionFrameKey = '';
+
+  const isTimedTextXml = (text) => (
+    typeof text === 'string' &&
+    /<timedtext\b/i.test(text) &&
+    /<body\b/i.test(text) &&
+    /<p\b/i.test(text)
+  );
+
+  const timedTextNumberAttr = (el, name, fallback = null) => {
+    const raw = el ? el.getAttribute(name) : null;
+    if (raw === null || raw === '') return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  };
+
+  const normalizeTimedTextCaption = (text) => (
+    String(text || '')
+      .replace(/\u200B/g, '')
+      .replace(/\uFEFF/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .trim()
+  );
+
+  const parseTimedTextStyleMap = (root, tagName) => {
+    const out = new Map();
+    root.querySelectorAll(tagName).forEach((el) => {
+      const id = el.getAttribute('id');
+      if (!id) return;
+      const attrs = {};
+      Array.from(el.attributes || []).forEach(attr => {
+        attrs[attr.name] = attr.value;
+      });
+      out.set(String(id), attrs);
+    });
+    return out;
+  };
+
+  const extractTimedTextSegments = (node, inheritedPenId = '') => {
+    const segments = [];
+    const walk = (current, penId) => {
+      Array.from(current.childNodes || []).forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const text = String(child.nodeValue || '').replace(/\u200B/g, '').replace(/\uFEFF/g, '');
+          if (text.trim()) segments.push({ text, penId });
+          return;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const nextPenId = child.getAttribute('p') || penId;
+        walk(child, nextPenId);
+      });
+    };
+    walk(node, inheritedPenId);
+    return segments;
+  };
+
+  const buildTimedTextPlainLines = (events) => {
+    const lines = [];
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+    events.forEach((event) => {
+      const text = normalizeTimedTextCaption(event.text);
+      const norm = normalize(text);
+      if (!norm) return;
+
+      const last = lines[lines.length - 1];
+      if (last && event.time <= (last.endTime || last.time) + 0.35) {
+        const lastNorm = normalize(last.text);
+        if (norm === lastNorm) return;
+        if (norm.includes(lastNorm) || lastNorm.includes(norm)) {
+          if (norm.length >= lastNorm.length) {
+            last.time = event.time;
+            last.endTime = event.endTime;
+            last.text = text;
+          }
+          return;
+        }
+      }
+
+      lines.push({
+        time: event.time,
+        endTime: event.endTime,
+        text,
+      });
+    });
+
+    return lines.map(({ time, text }) => ({ time, text }));
+  };
+
+  const parseTimedTextAnimation = (xmlText) => {
+    if (!isTimedTextXml(xmlText) || typeof DOMParser === 'undefined') return null;
+    try {
+      const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+      if (doc.querySelector('parsererror')) return null;
+      const root = doc.querySelector('timedtext');
+      if (!root) return null;
+
+      const pens = parseTimedTextStyleMap(root, 'pen');
+      const windows = parseTimedTextStyleMap(root, 'wp');
+      const windowStyles = parseTimedTextStyleMap(root, 'ws');
+      const events = [];
+
+      root.querySelectorAll('body > p').forEach((p, index) => {
+        const startMs = timedTextNumberAttr(p, 't', null);
+        const durationMs = timedTextNumberAttr(p, 'd', 0);
+        if (startMs === null) return;
+
+        const penId = p.getAttribute('p') || '';
+        const wpId = p.getAttribute('wp') || '';
+        const wsId = p.getAttribute('ws') || '';
+        const segments = extractTimedTextSegments(p, penId);
+        const text = normalizeTimedTextCaption(segments.map(s => s.text).join(''));
+        if (!text) return;
+
+        events.push({
+          id: index,
+          time: startMs / 1000,
+          endTime: (startMs + Math.max(60, durationMs || 0)) / 1000,
+          startMs,
+          endMs: startMs + Math.max(60, durationMs || 0),
+          durationMs,
+          text,
+          segments: segments.length ? segments : [{ text, penId }],
+          penId,
+          wpId,
+          wsId,
+          pen: pens.get(String(penId)) || {},
+          window: windows.get(String(wpId)) || {},
+          windowStyle: windowStyles.get(String(wsId)) || {},
+        });
+      });
+
+      if (!events.length) return null;
+      events.sort((a, b) => a.startMs - b.startMs || a.id - b.id);
+      return {
+        pens,
+        windows,
+        windowStyles,
+        events,
+        plainLines: buildTimedTextPlainLines(events),
+      };
+    } catch (e) {
+      console.warn('TimedText parse failed', e);
+      return null;
+    }
+  };
+
+  const getTimedTextAnchorTransform = (anchorPoint) => {
+    const ap = Number(anchorPoint);
+    const map = {
+      0: 'translate(0, 0)',
+      1: 'translate(-50%, 0)',
+      2: 'translate(-100%, 0)',
+      3: 'translate(0, -50%)',
+      4: 'translate(-50%, -50%)',
+      5: 'translate(-100%, -50%)',
+      6: 'translate(0, -100%)',
+      7: 'translate(-50%, -100%)',
+      8: 'translate(-100%, -100%)',
+    };
+    return map[ap] || 'translate(-50%, -50%)';
+  };
+
+  const getTimedTextAlign = (windowStyle) => {
+    const ju = Number(windowStyle?.ju);
+    if (ju === 0) return 'left';
+    if (ju === 2) return 'right';
+    return 'center';
+  };
+
+  const getTimedTextCueStyle = (event) => {
+    const pen = event.pen || {};
+    const win = event.window || {};
+    const left = timedTextNumberAttr({ getAttribute: n => win[n] }, 'ah', 50);
+    const top = timedTextNumberAttr({ getAttribute: n => win[n] }, 'av', 80);
+    const size = Number(pen.sz || 140);
+    const fontSize = Math.max(15, Math.min(76, size * 0.24));
+    const opacity = pen.fo !== undefined ? Math.max(0, Math.min(1, Number(pen.fo) / 254)) : 1;
+    const color = /^#[0-9a-f]{6}$/i.test(pen.fc || '') ? pen.fc : '#FEFEFE';
+    const edgeColor = /^#[0-9a-f]{6}$/i.test(pen.ec || '') ? pen.ec : '#000000';
+    const textShadow = pen.ec
+      ? `0 0 2px ${edgeColor}, 0 2px 8px rgba(0,0,0,.72)`
+      : '0 2px 10px rgba(0,0,0,.72)';
+
+    return [
+      `left:${left}%`,
+      `top:${top}%`,
+      `transform:${getTimedTextAnchorTransform(win.ap)}`,
+      `font-size:${fontSize}px`,
+      `color:${color}`,
+      `opacity:${opacity}`,
+      `text-shadow:${textShadow}`,
+      `text-align:${getTimedTextAlign(event.windowStyle)}`,
+      pen.i === '1' ? 'font-style:italic' : '',
+    ].filter(Boolean).join(';');
+  };
+
+  const getTimedTextSegmentHtml = (event) => (
+    (event.segments || [{ text: event.text, penId: event.penId }]).map(segment => {
+      const pen = animatedCaptionData?.pens?.get(String(segment.penId || event.penId)) || event.pen || {};
+      const color = /^#[0-9a-f]{6}$/i.test(pen.fc || '') ? pen.fc : '';
+      const opacity = pen.fo !== undefined ? Math.max(0, Math.min(1, Number(pen.fo) / 254)) : null;
+      const size = Number(pen.sz || 0);
+      const style = [
+        color ? `color:${color}` : '',
+        opacity !== null ? `opacity:${opacity}` : '',
+        size ? `font-size:${Math.max(15, Math.min(76, size * 0.24))}px` : '',
+        pen.i === '1' ? 'font-style:italic' : '',
+      ].filter(Boolean).join(';');
+      return `<span${style ? ` style="${style}"` : ''}>${escapeHtml(segment.text)}</span>`;
+    }).join('')
+  );
+
+  function renderAnimatedTimedText(captionData) {
+    if (!ui.lyrics || !captionData) return;
+    animatedCaptionData = captionData;
+    animatedCaptionFrameKey = '';
+    hasTimestamp = true;
+    document.body.classList.remove('ytm-no-lyrics', 'ytm-no-timestamp');
+    document.body.classList.add('ytm-has-timestamp', 'ytm-animated-caption-mode');
+    ui.lyrics.innerHTML = '<div class="ytm-animated-caption-stage" aria-live="off"></div>';
+    const now = getCurrentPlaybackTimeSec();
+    updateAnimatedCaptionStage(typeof now === 'number' ? now : 0, true);
+  }
+
+  function updateAnimatedCaptionStage(currentTime, force = false) {
+    if (!animatedCaptionData || !ui.lyrics) return;
+    const stage = ui.lyrics.querySelector('.ytm-animated-caption-stage');
+    if (!stage) return;
+    const tMs = Math.max(0, currentTime * 1000);
+    const active = animatedCaptionData.events
+      .filter(event => tMs + 40 >= event.startMs && tMs <= event.endMs + 40)
+      .slice(-24);
+    const key = active.map(event => `${event.id}:${event.startMs}:${event.endMs}`).join('|');
+    if (!force && key === animatedCaptionFrameKey) return;
+    animatedCaptionFrameKey = key;
+    stage.innerHTML = active.map(event => (
+      `<div class="ytm-animated-caption-cue" style="${getTimedTextCueStyle(event)}">${getTimedTextSegmentHtml(event)}</div>`
+    )).join('');
+  }
+
   function setupMovieMode() {
     const resizeObserver = new ResizeObserver(() => {
       window.dispatchEvent(new Event('resize'));
@@ -2220,12 +2466,31 @@ async function applyLyricsText(rawLyrics) {
       if (keyAtStart !== currentKey) return;
       lyricsData = [];
       hasTimestamp = false;
+      animatedCaptionData = null;
       renderLyrics([]);
       refreshMeaningUi();
       return;
     }
     lastRawLyricsText = rawLyrics;
-    let parsed = parseBaseLRC(rawLyrics);
+    const timedTextData = parseTimedTextAnimation(rawLyrics);
+    let parsed = null;
+    if (timedTextData) {
+      if (config.useAnimatedCaptions) {
+        lyricsData = timedTextData.plainLines || [];
+        dynamicLines = null;
+        duetSubDynamicLines = null;
+        renderAnimatedTimedText(timedTextData);
+        refreshMeaningUi();
+        if (meaningPanelVisible) syncMeaningPanelToPlayback(true);
+        return;
+      }
+      animatedCaptionData = null;
+      hasTimestamp = true;
+      parsed = timedTextData.plainLines || [];
+    } else {
+      animatedCaptionData = null;
+      parsed = parseBaseLRC(rawLyrics);
+    }
     const videoUrl = getCurrentVideoUrl();
 
     // duet: if sub.txt exists, hide (filter) the normal lines that match sub timestamps,
@@ -2452,10 +2717,13 @@ async function applyLyricsText(rawLyrics) {
     console.log('[CS] GET_CANDIDATE_LYRICS request:', payload);
     const res = await safeRuntimeSendMessage({ type: 'GET_CANDIDATE_LYRICS', payload });
     console.log('[CS] GET_CANDIDATE_LYRICS response:', res);
-    if (res && res.success && typeof res.lyrics === 'string' && res.lyrics.trim()) {
+    const hasResponseLyrics = typeof res?.lyrics === 'string' && res.lyrics.trim();
+    const hasResponseAnimatedLyrics = typeof res?.animated_lyrics === 'string' && res.animated_lyrics.trim();
+    if (res && res.success && (hasResponseLyrics || hasResponseAnimatedLyrics)) {
       const next = {
         ...(cand || {}),
-        lyrics: res.lyrics,
+        lyrics: res.lyrics || cand?.lyrics || '',
+        animated_lyrics: res.animated_lyrics || cand?.animated_lyrics || null,
         meaningData: res.meaningData || cand?.meaningData || null,
         songSummary: res.songSummary || cand?.songSummary || null,
         comments: Array.isArray(res.comments) ? res.comments : (Array.isArray(cand?.comments) ? cand.comments : []),
@@ -2609,10 +2877,15 @@ async function applyLyricsText(rawLyrics) {
     if (!(typeof cand.lyrics === 'string' && cand.lyrics.trim())) {
       cand = await ensureCandidateLyricsLoaded(candId);
     }
-    if (!cand || typeof cand.lyrics !== 'string' || !cand.lyrics.trim()) {
+    const hasCandidateLyrics = typeof cand?.lyrics === 'string' && cand.lyrics.trim();
+    const hasCandidateAnimatedLyrics = typeof cand?.animated_lyrics === 'string' && cand.animated_lyrics.trim();
+    if (!cand || (!hasCandidateLyrics && !hasCandidateAnimatedLyrics)) {
       showToast('この候補の歌詞データを読み込めませんでした');
       return;
     }
+    const nextLyricsText = (config.useAnimatedCaptions && hasCandidateAnimatedLyrics)
+      ? cand.animated_lyrics
+      : cand.lyrics;
     selectedCandidateId = candId;
     dynamicLines = null;
     lyricsTranslationMap = {
@@ -2625,6 +2898,7 @@ async function applyLyricsText(rawLyrics) {
     if (currentKey) {
       storage.set(currentKey, {
         lyrics: cand.lyrics,
+        animated_lyrics: cand.animated_lyrics || null,
         dynamicLines: null,
         noLyrics: false,
         lrcMap: lyricsTranslationMap || null,
@@ -2632,7 +2906,7 @@ async function applyLyricsText(rawLyrics) {
         candidateId: cand.id || candId || null
       });
     }
-    await applyLyricsText(cand.lyrics);
+    await applyLyricsText(nextLyricsText);
     const youtube_url = getCurrentVideoUrl();
     const video_id = getCurrentVideoId();
     const candidate_id = cand.id || candId;
@@ -3021,6 +3295,8 @@ async function applyLyricsText(rawLyrics) {
     if (saveOffsetStored !== null) config.saveSyncOffset = saveOffsetStored;
     const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
     if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
+    const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
+    if (animatedCaptionStored !== null) config.useAnimatedCaptions = !!animatedCaptionStored;
 
     // ★スライダー初期値反映
     const weightStored = await storage.get('ytm_lyric_weight');
@@ -3193,6 +3469,12 @@ function renderSettingsPanel() {
               </div>
               <div class="setting-row">
                 <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+                  <span>${t('settings_animated_captions') || 'アニメーション字幕を使う'}</span>
+                  <input type="checkbox" id="animated-caption-toggle">
+                </label>
+              </div>
+              <div class="setting-row">
+                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
                   <span>LrcLibからのフォールバック取得</span>
                   <input type="checkbox" id="lrclib-fallback-toggle">
                 </label>
@@ -3323,6 +3605,7 @@ function renderSettingsPanel() {
     document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
     document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
     document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
+    document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
     document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
 
     // 共有翻訳の残り文字数（保存済み値を表示）
@@ -3371,12 +3654,14 @@ function renderSettingsPanel() {
       const savedUseTrans = await storage.get('ytm_trans_enabled');
       const savedSharedTrans = await storage.get('ytm_shared_trans_enabled');
       const savedUiLang = await storage.get('ytm_ui_lang');
+      const savedAnimatedCaptions = await storage.get('ytm_animated_captions_enabled');
 
       const prevMainLang = savedMainLang || 'original';
       const prevSubLang = savedSubLang !== null ? savedSubLang : 'en';
       const prevUseTrans = savedUseTrans !== null ? savedUseTrans : true;
       const prevUseSharedTrans = savedSharedTrans !== null ? savedSharedTrans : false;
       const prevUiLang = savedUiLang || (config.uiLang || 'ja');
+      const prevAnimatedCaptions = savedAnimatedCaptions !== null ? !!savedAnimatedCaptions : false;
 
       // 画面から値を取得
       config.deepLKey = document.getElementById('deepl-key-input').value.trim();
@@ -3384,6 +3669,7 @@ function renderSettingsPanel() {
       config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
       config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
       config.appleBg = document.getElementById('apple-bg-toggle').checked;
+      config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
       config.useLrcLibFallback = document.getElementById('lrclib-fallback-toggle').checked;
       config.lyricWeight = document.getElementById('weight-slider').value;
       config.bgBrightness = document.getElementById('bright-slider').value;
@@ -3400,6 +3686,7 @@ function renderSettingsPanel() {
       document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
       
       storage.set('ytm_apple_bg', config.appleBg);
+      storage.set('ytm_animated_captions_enabled', config.useAnimatedCaptions);
       storage.set('ytm_lrclib_fallback', config.useLrcLibFallback);
       document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
       storage.set('ytm_main_lang', config.mainLang);
@@ -3415,7 +3702,8 @@ function renderSettingsPanel() {
         prevSubLang !== config.subLang ||
         prevUseTrans !== config.useTrans ||
         prevUseSharedTrans !== config.useSharedTranslateApi ||
-        prevUiLang !== config.uiLang
+        prevUiLang !== config.uiLang ||
+        prevAnimatedCaptions !== config.useAnimatedCaptions
       );
 
       if (needReload) {
@@ -3852,6 +4140,8 @@ function renderSettingsPanel() {
     if (uiLangStored) config.uiLang = uiLangStored;
     const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
     if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
+    const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
+    if (animatedCaptionStored !== null && animatedCaptionStored !== undefined) config.useAnimatedCaptions = !!animatedCaptionStored;
 
     const thisKey = `${meta.title}///${meta.artist}`;
     if (thisKey !== currentKey) return;
@@ -3875,7 +4165,11 @@ function renderSettingsPanel() {
       } else if (typeof cached === 'string') {
         data = cached;
       } else if (typeof cached === 'object') {
-        if (typeof cached.lyrics === 'string') data = cached.lyrics;
+        if (config.useAnimatedCaptions && typeof cached.animated_lyrics === 'string' && cached.animated_lyrics.trim()) {
+          data = cached.animated_lyrics;
+        } else if (typeof cached.lyrics === 'string') {
+          data = cached.lyrics;
+        }
         if (Array.isArray(cached.dynamicLines)) dynamicLines = cached.dynamicLines;
         if (typeof cached.subLyrics === 'string') duetSubLyricsRaw = cached.subLyrics;
         if (cached.noLyrics) noLyricsCached = true;
@@ -3927,14 +4221,18 @@ function renderSettingsPanel() {
         if (nextMeaningData) setLyricsMeaningData(nextMeaningData);
         if (typeof res?.subLyrics === 'string' && res.subLyrics.trim()) duetSubLyricsRaw = res.subLyrics;
 
-        if (res?.success && typeof res.lyrics === 'string' && res.lyrics.trim()) {
-          data = res.lyrics;
+        const responseLyrics = typeof res?.lyrics === 'string' ? res.lyrics : '';
+        const responseAnimatedLyrics = typeof res?.animated_lyrics === 'string' ? res.animated_lyrics : '';
+        const preferredLyrics = (config.useAnimatedCaptions && responseAnimatedLyrics.trim()) ? responseAnimatedLyrics : responseLyrics;
+        if (res?.success && preferredLyrics.trim()) {
+          data = preferredLyrics;
           gotLyrics = true;
           if (Array.isArray(res.dynamicLines) && res.dynamicLines.length) dynamicLines = res.dynamicLines;
           if (thisKey === currentKey) {
             clearLyricsLateRetry(thisKey);
             storage.set(thisKey, {
-              lyrics: data,
+              lyrics: responseLyrics || data,
+              animated_lyrics: responseAnimatedLyrics || null,
               dynamicLines: dynamicLines || null,
               noLyrics: false,
               subLyrics: (typeof duetSubLyricsRaw === 'string' ? duetSubLyricsRaw : ''),
@@ -4045,6 +4343,8 @@ const optimizeLineBreaks = (text) => {
   };    
   function renderLyrics(data) {
     if (!ui.lyrics) return;
+    document.body.classList.remove('ytm-animated-caption-mode');
+    animatedCaptionFrameKey = '';
     ui.lyrics.innerHTML = '';
     ui.lyrics.scrollTop = 0;
     const hasData = Array.isArray(data) && data.length > 0;
@@ -4203,7 +4503,10 @@ const optimizeLineBreaks = (text) => {
           if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
           t = Math.max(0, t - timeOffset);
           t = Math.min(Math.max(0, t + (config.syncOffset / 1000)), v.duration);
-          if (lyricsData.length && hasTimestamp) {
+          if (animatedCaptionData && config.useAnimatedCaptions) {
+            updateAnimatedCaptionStage(t);
+          }
+          if (!animatedCaptionData && lyricsData.length && hasTimestamp) {
             updateLyricHighlight(t);
           }
 
