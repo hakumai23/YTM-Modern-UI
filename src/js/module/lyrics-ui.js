@@ -708,6 +708,252 @@
 
     return found || null;
   };
+
+  let animatedCaptionData = null;
+  let animatedCaptionFrameKey = '';
+
+  const isTimedTextXml = (text) => (
+    typeof text === 'string' &&
+    /<timedtext\b/i.test(text) &&
+    /<body\b/i.test(text) &&
+    /<p\b/i.test(text)
+  );
+
+  const timedTextNumberAttr = (el, name, fallback = null) => {
+    const raw = el ? el.getAttribute(name) : null;
+    if (raw === null || raw === '') return fallback;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : fallback;
+  };
+
+  const normalizeTimedTextCaption = (text) => (
+    String(text || '')
+      .replace(/\u200B/g, '')
+      .replace(/\uFEFF/g, '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n[ \t]+/g, '\n')
+      .trim()
+  );
+
+  const parseTimedTextStyleMap = (root, tagName) => {
+    const out = new Map();
+    root.querySelectorAll(tagName).forEach((el) => {
+      const id = el.getAttribute('id');
+      if (!id) return;
+      const attrs = {};
+      Array.from(el.attributes || []).forEach(attr => {
+        attrs[attr.name] = attr.value;
+      });
+      out.set(String(id), attrs);
+    });
+    return out;
+  };
+
+  const extractTimedTextSegments = (node, inheritedPenId = '') => {
+    const segments = [];
+    const walk = (current, penId) => {
+      Array.from(current.childNodes || []).forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const text = String(child.nodeValue || '').replace(/\u200B/g, '').replace(/\uFEFF/g, '');
+          if (text.trim()) segments.push({ text, penId });
+          return;
+        }
+        if (child.nodeType !== Node.ELEMENT_NODE) return;
+        const nextPenId = child.getAttribute('p') || penId;
+        walk(child, nextPenId);
+      });
+    };
+    walk(node, inheritedPenId);
+    return segments;
+  };
+
+  const buildTimedTextPlainLines = (events) => {
+    const lines = [];
+    const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+    events.forEach((event) => {
+      const text = normalizeTimedTextCaption(event.text);
+      const norm = normalize(text);
+      if (!norm) return;
+
+      const last = lines[lines.length - 1];
+      if (last && event.time <= (last.endTime || last.time) + 0.35) {
+        const lastNorm = normalize(last.text);
+        if (norm === lastNorm) return;
+        if (norm.includes(lastNorm) || lastNorm.includes(norm)) {
+          if (norm.length >= lastNorm.length) {
+            last.time = event.time;
+            last.endTime = event.endTime;
+            last.text = text;
+          }
+          return;
+        }
+      }
+
+      lines.push({
+        time: event.time,
+        endTime: event.endTime,
+        text,
+      });
+    });
+
+    return lines.map(({ time, text }) => ({ time, text }));
+  };
+
+  const parseTimedTextAnimation = (xmlText) => {
+    if (!isTimedTextXml(xmlText) || typeof DOMParser === 'undefined') return null;
+    try {
+      const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+      if (doc.querySelector('parsererror')) return null;
+      const root = doc.querySelector('timedtext');
+      if (!root) return null;
+
+      const pens = parseTimedTextStyleMap(root, 'pen');
+      const windows = parseTimedTextStyleMap(root, 'wp');
+      const windowStyles = parseTimedTextStyleMap(root, 'ws');
+      const events = [];
+
+      root.querySelectorAll('body > p').forEach((p, index) => {
+        const startMs = timedTextNumberAttr(p, 't', null);
+        const durationMs = timedTextNumberAttr(p, 'd', 0);
+        if (startMs === null) return;
+
+        const penId = p.getAttribute('p') || '';
+        const wpId = p.getAttribute('wp') || '';
+        const wsId = p.getAttribute('ws') || '';
+        const segments = extractTimedTextSegments(p, penId);
+        const text = normalizeTimedTextCaption(segments.map(s => s.text).join(''));
+        if (!text) return;
+
+        events.push({
+          id: index,
+          time: startMs / 1000,
+          endTime: (startMs + Math.max(60, durationMs || 0)) / 1000,
+          startMs,
+          endMs: startMs + Math.max(60, durationMs || 0),
+          durationMs,
+          text,
+          segments: segments.length ? segments : [{ text, penId }],
+          penId,
+          wpId,
+          wsId,
+          pen: pens.get(String(penId)) || {},
+          window: windows.get(String(wpId)) || {},
+          windowStyle: windowStyles.get(String(wsId)) || {},
+        });
+      });
+
+      if (!events.length) return null;
+      events.sort((a, b) => a.startMs - b.startMs || a.id - b.id);
+      return {
+        pens,
+        windows,
+        windowStyles,
+        events,
+        plainLines: buildTimedTextPlainLines(events),
+      };
+    } catch (e) {
+      console.warn('TimedText parse failed', e);
+      return null;
+    }
+  };
+
+  const getTimedTextAnchorTransform = (anchorPoint) => {
+    const ap = Number(anchorPoint);
+    const map = {
+      0: 'translate(0, 0)',
+      1: 'translate(-50%, 0)',
+      2: 'translate(-100%, 0)',
+      3: 'translate(0, -50%)',
+      4: 'translate(-50%, -50%)',
+      5: 'translate(-100%, -50%)',
+      6: 'translate(0, -100%)',
+      7: 'translate(-50%, -100%)',
+      8: 'translate(-100%, -100%)',
+    };
+    return map[ap] || 'translate(-50%, -50%)';
+  };
+
+  const getTimedTextAlign = (windowStyle) => {
+    const ju = Number(windowStyle?.ju);
+    if (ju === 0) return 'left';
+    if (ju === 2) return 'right';
+    return 'center';
+  };
+
+  const getTimedTextCueStyle = (event) => {
+    const pen = event.pen || {};
+    const win = event.window || {};
+    const left = timedTextNumberAttr({ getAttribute: n => win[n] }, 'ah', 50);
+    const top = timedTextNumberAttr({ getAttribute: n => win[n] }, 'av', 80);
+    const size = Number(pen.sz || 140);
+    const fontSize = Math.max(15, Math.min(76, size * 0.24));
+    const opacity = pen.fo !== undefined ? Math.max(0, Math.min(1, Number(pen.fo) / 254)) : 1;
+    const color = /^#[0-9a-f]{6}$/i.test(pen.fc || '') ? pen.fc : '#FEFEFE';
+    const edgeColor = /^#[0-9a-f]{6}$/i.test(pen.ec || '') ? pen.ec : '#000000';
+    const textShadow = pen.ec
+      ? `0 0 2px ${edgeColor}, 0 2px 8px rgba(0,0,0,.72)`
+      : '0 2px 10px rgba(0,0,0,.72)';
+
+    return [
+      `left:${left}%`,
+      `top:${top}%`,
+      `transform:${getTimedTextAnchorTransform(win.ap)}`,
+      `font-size:${fontSize}px`,
+      `color:${color}`,
+      `opacity:${opacity}`,
+      `text-shadow:${textShadow}`,
+      `text-align:${getTimedTextAlign(event.windowStyle)}`,
+      pen.i === '1' ? 'font-style:italic' : '',
+    ].filter(Boolean).join(';');
+  };
+
+  const getTimedTextSegmentHtml = (event) => (
+    (event.segments || [{ text: event.text, penId: event.penId }]).map(segment => {
+      const pen = animatedCaptionData?.pens?.get(String(segment.penId || event.penId)) || event.pen || {};
+      const color = /^#[0-9a-f]{6}$/i.test(pen.fc || '') ? pen.fc : '';
+      const opacity = pen.fo !== undefined ? Math.max(0, Math.min(1, Number(pen.fo) / 254)) : null;
+      const size = Number(pen.sz || 0);
+      const style = [
+        color ? `color:${color}` : '',
+        opacity !== null ? `opacity:${opacity}` : '',
+        size ? `font-size:${Math.max(15, Math.min(76, size * 0.24))}px` : '',
+        pen.i === '1' ? 'font-style:italic' : '',
+      ].filter(Boolean).join(';');
+      return `<span${style ? ` style="${style}"` : ''}>${escapeHtml(segment.text)}</span>`;
+    }).join('')
+  );
+
+  function renderAnimatedTimedText(captionData) {
+    if (!ui.lyrics || !captionData) return;
+    animatedCaptionData = captionData;
+    animatedCaptionFrameKey = '';
+    hasTimestamp = true;
+    document.body.classList.remove('ytm-no-lyrics', 'ytm-no-timestamp');
+    document.body.classList.add('ytm-has-timestamp', 'ytm-animated-caption-mode');
+    ui.lyrics.innerHTML = '<div class="ytm-animated-caption-stage" aria-live="off"></div>';
+    const now = getCurrentPlaybackTimeSec();
+    updateAnimatedCaptionStage(typeof now === 'number' ? now : 0, true);
+  }
+
+  function updateAnimatedCaptionStage(currentTime, force = false) {
+    if (!animatedCaptionData || !ui.lyrics) return;
+    const stage = ui.lyrics.querySelector('.ytm-animated-caption-stage');
+    if (!stage) return;
+    const tMs = Math.max(0, currentTime * 1000);
+    const active = animatedCaptionData.events
+      .filter(event => tMs + 40 >= event.startMs && tMs <= event.endMs + 40)
+      .slice(-24);
+    const key = active.map(event => `${event.id}:${event.startMs}:${event.endMs}`).join('|');
+    if (!force && key === animatedCaptionFrameKey) return;
+    animatedCaptionFrameKey = key;
+    stage.innerHTML = active.map(event => (
+      `<div class="ytm-animated-caption-cue" style="${getTimedTextCueStyle(event)}">${getTimedTextSegmentHtml(event)}</div>`
+    )).join('');
+  }
+
   function setupMovieMode() {
     const resizeObserver = new ResizeObserver(() => {
       window.dispatchEvent(new Event('resize'));
@@ -1195,8 +1441,38 @@
   };
 
 
+  const extractVideoIdFromHref = (href) => {
+    if (!href) return null;
+    try {
+      const url = new URL(href, location.origin);
+      const vid = url.searchParams.get('v');
+      if (vid) return vid;
+      if (url.hostname.includes('youtu.be')) {
+        return (url.pathname || '').split('/').filter(Boolean)[0] || null;
+      }
+    } catch (e) { }
+    return null;
+  };
+
+  const getCurrentVideoIdFromDom = () => {
+    const selectors = [
+      'ytmusic-player-bar yt-formatted-string.title a[href*="watch"]',
+      'ytmusic-player-bar a[href*="watch?v="]'
+    ];
+
+    for (const selector of selectors) {
+      const link = document.querySelector(selector);
+      const vid = extractVideoIdFromHref(link && (link.href || link.getAttribute('href')));
+      if (vid) return vid;
+    }
+    return null;
+  };
+
   const getCurrentVideoUrl = () => {
     try {
+      const domVid = getCurrentVideoIdFromDom();
+      if (domVid) return `https://youtu.be/${domVid}`;
+
       const url = new URL(location.href);
       const vid = url.searchParams.get('v');
       return vid ? `https://youtu.be/${vid}` : location.href;
@@ -1208,6 +1484,9 @@
 
   const getCurrentVideoId = () => {
     try {
+      const domVid = getCurrentVideoIdFromDom();
+      if (domVid) return domVid;
+
       const url = new URL(location.href);
       return url.searchParams.get('v');
     } catch (e) {
@@ -1249,8 +1528,9 @@
       }
 
       // candidates/config が更新されたらメニューを再描画
-      if (p.meaningData) {
-        setLyricsMeaningData(p.meaningData);
+      const incomingMeaningData = normalizeMeaningPayloadLocal(p);
+      if (incomingMeaningData) {
+        setLyricsMeaningData(incomingMeaningData);
         persistMeaningDataToCurrentCache().catch(() => { });
         if (meaningPanelVisible) syncMeaningPanelToPlayback(true);
       }
@@ -1293,6 +1573,10 @@
     .replace(/'/g, '&#39;');
 
   const parseMeaningTimeToSecLocal = (value) => {
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) return null;
+      return value > 10000 ? value / 1000 : value;
+    }
     const s = String(value || '').trim();
     const m = s.match(/^(\d+):(\d{2})(?:\.(\d{1,3}))?$/);
     if (!m) return null;
@@ -1306,51 +1590,138 @@
     return (min * 60) + sec + (ms / 1000);
   };
 
+  const formatMeaningTimeLocal = (seconds) => {
+    if (typeof seconds !== 'number' || Number.isNaN(seconds)) return '';
+    const total = Math.max(0, seconds);
+    const min = Math.floor(total / 60);
+    const sec = Math.floor(total - min * 60);
+    const cs = Math.floor((total - min * 60 - sec) * 100);
+    return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+  };
+
+  const normalizeMeaningStringListLocal = (value) => {
+    if (Array.isArray(value)) return value.map(v => String(v || '').trim()).filter(Boolean);
+    if (typeof value === 'string') return value.split(/[,\n]/).map(v => v.trim()).filter(Boolean);
+    return [];
+  };
+
+  const normalizeMeaningSourceLocal = (payload) => {
+    if (!payload) return null;
+    if (Array.isArray(payload)) return { explanations: payload };
+    if (typeof payload !== 'object') return null;
+
+    const rawMeaningData = payload.meaningData;
+    if (!rawMeaningData) return payload;
+
+    const meaningData = Array.isArray(rawMeaningData)
+      ? { explanations: rawMeaningData }
+      : (typeof rawMeaningData === 'object' ? rawMeaningData : {});
+
+    return {
+      ...payload,
+      ...meaningData,
+      explanations: Array.isArray(meaningData.explanations)
+        ? meaningData.explanations
+        : (Array.isArray(payload.explanations) ? payload.explanations : []),
+      timeline_meanings: Array.isArray(meaningData.timeline_meanings)
+        ? meaningData.timeline_meanings
+        : (Array.isArray(payload.timeline_meanings) ? payload.timeline_meanings : []),
+      song_summary: meaningData.song_summary || meaningData.songSummary || payload.song_summary || payload.songSummary || null,
+      final_summary: meaningData.final_summary || payload.final_summary || null,
+      comments: Array.isArray(meaningData.comments) ? meaningData.comments : (Array.isArray(payload.comments) ? payload.comments : []),
+      rating: meaningData.rating || payload.rating || null,
+    };
+  };
+
+  const normalizeMeaningCommentsLocal = (comments) => {
+    if (!Array.isArray(comments)) return [];
+    return comments
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null;
+        const body = String(item.body || item.comment || item.text || '').trim();
+        if (!body) return null;
+        return {
+          body,
+          contributorName: String(item.contributor_name || item.contributorName || item.user || item.name || '').trim(),
+          createdAt: String(item.created_at || item.createdAt || '').trim(),
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const normalizeMeaningRatingLocal = (rating) => {
+    if (!rating || typeof rating !== 'object') return null;
+    const average = Number(rating.average ?? rating.avg ?? rating.score);
+    const count = Number(rating.count ?? rating.total ?? rating.votes);
+    const hasAverage = Number.isFinite(average);
+    const hasCount = Number.isFinite(count);
+    if (!hasAverage && !hasCount) return null;
+    return {
+      average: hasAverage ? average : null,
+      count: hasCount ? count : null,
+    };
+  };
+
   const normalizeMeaningPayloadLocal = (payload) => {
-    if (!payload || typeof payload !== 'object') return null;
+    const source = normalizeMeaningSourceLocal(payload);
+    if (!source || typeof source !== 'object') return null;
 
     // Handle new LRCHub "explanations" format
-    const rawTimeline = Array.isArray(payload.explanations) ? payload.explanations : (Array.isArray(payload.timeline_meanings) ? payload.timeline_meanings : []);
+    const rawTimeline = Array.isArray(source.explanations) ? source.explanations : (Array.isArray(source.timeline_meanings) ? source.timeline_meanings : []);
 
     const timeline = rawTimeline
       .map((item) => {
         if (!item || typeof item !== 'object') return null;
         
         // Map from either new LRCHub spec or old spec
-        const start = String(item.start_time || item.start || '').trim();
-        const end = String(item.end_time || item.end || '').trim();
+        const startRaw = String(item.start_time || item.start || '').trim();
+        const endRaw = String(item.end_time || item.end || '').trim();
         
-        const startSec = (typeof item.start_ms === 'number') ? item.start_ms / 1000 : parseMeaningTimeToSecLocal(start);
-        const endSec = (typeof item.end_ms === 'number') ? item.end_ms / 1000 : parseMeaningTimeToSecLocal(end);
+        const startSec = (typeof item.start_ms === 'number') ? item.start_ms / 1000 : parseMeaningTimeToSecLocal(item.start_sec ?? item.startSec ?? startRaw);
+        const endSec = (typeof item.end_ms === 'number') ? item.end_ms / 1000 : parseMeaningTimeToSecLocal(item.end_sec ?? item.endSec ?? endRaw);
+        const start = startRaw || formatMeaningTimeLocal(startSec);
+        const end = endRaw || formatMeaningTimeLocal(endSec);
 
         return {
           start,
           end,
           startSec,
           endSec,
-          label: String(item.lyrics || item.label || '').trim(),
-          summary: String(item.summary || '').trim(),
-          detail: String(item.meaning || item.detail || '').trim(),
-          emotion: Array.isArray(item.emotion) ? item.emotion.map(v => String(v || '').trim()).filter(Boolean) : [],
-          keywords: Array.isArray(item.keywords) ? item.keywords.map(v => String(v || '').trim()).filter(Boolean) : [],
+          label: String(item.lyrics || item.label || item.text || '').trim(),
+          summary: String(item.summary || item.synopsis || '').trim(),
+          detail: String(item.meaning || item.detail || item.explanation || item.description || '').trim(),
+          emotion: normalizeMeaningStringListLocal(item.emotion || item.emotions || item.mood),
+          keywords: normalizeMeaningStringListLocal(item.keywords || item.keyword),
         };
       })
-      .filter(Boolean);
+      .filter(item => item && (item.label || item.summary || item.detail));
 
-    const finalSummaryRaw = payload.final_summary && typeof payload.final_summary === 'object'
-      ? payload.final_summary
+    const songSummaryRaw = source.song_summary && typeof source.song_summary === 'object'
+      ? source.song_summary
+      : (source.songSummary && typeof source.songSummary === 'object' ? source.songSummary : {});
+    const finalSummaryRaw = source.final_summary && typeof source.final_summary === 'object'
+      ? source.final_summary
       : {};
+    const synopsis = String(songSummaryRaw.synopsis || finalSummaryRaw.synopsis || '').trim();
+    const message = String(songSummaryRaw.message || finalSummaryRaw.message || '').trim();
+    const summaryText = String(songSummaryRaw.summary || finalSummaryRaw.summary || '').trim();
+    const longSummaryParts = [synopsis, message, summaryText].filter(Boolean);
     const finalSummary = {
-      short: typeof finalSummaryRaw.short === 'string' ? finalSummaryRaw.short.trim() : '',
-      long: typeof finalSummaryRaw.long === 'string' ? finalSummaryRaw.long.trim() : '',
+      short: String(finalSummaryRaw.short || synopsis || message || summaryText || '').trim(),
+      long: String(finalSummaryRaw.long || longSummaryParts.join('\n\n') || finalSummaryRaw.short || '').trim(),
     };
+    const comments = normalizeMeaningCommentsLocal(source.comments);
+    const rating = normalizeMeaningRatingLocal(source.rating);
 
-    if (!timeline.length && !finalSummary.short && !finalSummary.long) return null;
+    if (!timeline.length && !finalSummary.short && !finalSummary.long && !comments.length && !rating) return null;
 
     return {
-      title: typeof payload.title === 'string' ? payload.title.trim() : '',
+      title: String(source.display_name || source.title || source.track || '').trim(),
       timeline_meanings: timeline,
       final_summary: finalSummary,
+      song_summary: { synopsis, message, summary: summaryText },
+      comments,
+      rating,
     };
   };
 
@@ -1447,6 +1818,50 @@
     return `<div class="ytm-meaning-chip-group"><div class="ytm-meaning-chip-label">${escapeHtml(label)}</div><div class="ytm-meaning-chip-list">${chips}</div></div>`;
   };
 
+  const buildMeaningRatingHtml = () => {
+    const rating = lyricsMeaning && lyricsMeaning.rating;
+    if (!rating) return '';
+    const average = typeof rating.average === 'number' ? rating.average.toFixed(1) : '--';
+    const count = typeof rating.count === 'number' ? `${rating.count}件` : '';
+    return `<div class="ytm-meaning-rating"><span>★ ${escapeHtml(average)}</span>${count ? `<span>${escapeHtml(count)}</span>` : ''}</div>`;
+  };
+
+  const buildMeaningSummarySectionsHtml = () => {
+    const summary = (lyricsMeaning && lyricsMeaning.song_summary) || {};
+    const sections = [
+      ['あらすじ', summary.synopsis],
+      ['メッセージ', summary.message],
+      ['まとめ', summary.summary],
+    ].filter(([, text]) => String(text || '').trim());
+
+    return sections.map(([label, text]) => `
+      <section class="ytm-meaning-summary-section">
+        <div class="ytm-meaning-summary-section-label">${escapeHtml(label)}</div>
+        <p>${escapeHtml(text)}</p>
+      </section>
+    `).join('');
+  };
+
+  const buildMeaningCommentsHtml = () => {
+    const comments = lyricsMeaning && Array.isArray(lyricsMeaning.comments) ? lyricsMeaning.comments : [];
+    if (!comments.length) return '';
+    const items = comments.slice(0, 5).map((comment) => {
+      const meta = [comment.contributorName, comment.createdAt].filter(Boolean).join(' / ');
+      return `
+        <div class="ytm-meaning-comment">
+          <p>${escapeHtml(comment.body)}</p>
+          ${meta ? `<div class="ytm-meaning-comment-meta">${escapeHtml(meta)}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+    return `
+      <section class="ytm-meaning-comments">
+        <div class="ytm-meaning-summary-section-label">コメント</div>
+        ${items}
+      </section>
+    `;
+  };
+
   const getMeaningDisplayTitle = () => {
     const raw = (lyricsMeaning && lyricsMeaning.title) || ui.title?.textContent || 'Song Meaning';
     return String(raw || 'Song Meaning').trim();
@@ -1505,6 +1920,9 @@
         </div>
         <div class="ytm-meaning-panel-body">
           <p class="ytm-meaning-panel-text">${escapeHtml(fallbackText)}</p>
+          ${buildMeaningSummarySectionsHtml()}
+          ${buildMeaningRatingHtml()}
+          ${buildMeaningCommentsHtml()}
         </div>
       `;
       activeMeaningIndex = -1;
@@ -1523,6 +1941,7 @@
           ${segment.detail ? `<p class="ytm-meaning-panel-text">${escapeHtml(segment.detail)}</p>` : ''}
           ${buildMeaningChipGroup('感情', segment.emotion, 'emotion')}
           ${buildMeaningChipGroup('キーワード', segment.keywords, 'keyword')}
+          ${buildMeaningRatingHtml()}
         </div>
       `;
       activeMeaningIndex = normalizedIndex;
@@ -1620,13 +2039,16 @@
     const summary = lyricsMeaning.final_summary || {};
     const shortText = summary.short || '';
     const longText = summary.long || shortText || 'この曲の要約データはまだありません。';
+    const structuredSummaryHtml = buildMeaningSummarySectionsHtml();
 
     ui.meaningSummaryDialog.innerHTML = `
       <button class="ytm-meaning-summary-close" type="button" aria-label="Close">×</button>
       <div class="ytm-meaning-summary-eyebrow">要約</div>
       <div class="ytm-meaning-summary-title">${escapeHtml(getMeaningDisplayTitle())}</div>
+      ${buildMeaningRatingHtml()}
       ${shortText ? `<p class="ytm-meaning-summary-short">${escapeHtml(shortText)}</p>` : ''}
-      <p class="ytm-meaning-summary-long">${escapeHtml(longText)}</p>
+      ${structuredSummaryHtml || `<p class="ytm-meaning-summary-long">${escapeHtml(longText)}</p>`}
+      ${buildMeaningCommentsHtml()}
     `;
 
     const closeBtn = ui.meaningSummaryDialog.querySelector('.ytm-meaning-summary-close');
@@ -1670,28 +2092,133 @@
 
   // ===================== 歌詞＋翻訳適用 =====================
 
+  let lyricsTranslationMap = {};
+
+  const normalizeTranslationLangKey = (lang) => {
+    const key = String(lang || '').trim().toLowerCase();
+    if (key === 'jp') return 'ja';
+    if (key === 'kr') return 'ko';
+    if (key === 'cn' || key === 'zh-cn' || key === 'zh-tw') return 'zh';
+    return key;
+  };
+
+  const toLrchubTranslateLang = (lang) => {
+    const key = normalizeTranslationLangKey(lang);
+    if (!key || key === 'original') return '';
+    if (key === 'ja') return 'JA';
+    if (key === 'en') return 'EN';
+    if (key === 'ko') return 'KO';
+    if (key === 'zh') return 'CN';
+    return key.toUpperCase();
+  };
+
+  const extractTranslationLyricsLocal = (value) => {
+    if (typeof value === 'string') return value.trim();
+    if (!value || typeof value !== 'object') return '';
+
+    const fields = [
+      value.lyrics,
+      value.synced_lyrics,
+      value.syncedLyrics,
+      value.lrc,
+      value.plain_lyrics,
+      value.plainLyrics,
+      value.text
+    ];
+
+    for (const field of fields) {
+      if (typeof field === 'string' && field.trim()) return field.trim();
+    }
+    return '';
+  };
+
+  const normalizeTranslationsToLrcMapLocal = (input) => {
+    const out = {};
+    if (!input) return out;
+
+    if (input.lrc_map && typeof input.lrc_map === 'object') {
+      Object.entries(input.lrc_map).forEach(([lang, value]) => {
+        const key = normalizeTranslationLangKey(lang);
+        const lyrics = extractTranslationLyricsLocal(value);
+        if (key && lyrics) out[key] = lyrics;
+      });
+    }
+
+    if (Array.isArray(input)) {
+      input.forEach(item => {
+        if (!item) return;
+        const key = normalizeTranslationLangKey(item.language || item.lang || item.target_lang || item.targetLang);
+        const lyrics = extractTranslationLyricsLocal(item);
+        if (key && lyrics) out[key] = lyrics;
+      });
+      return out;
+    }
+
+    if (typeof input === 'object') {
+      Object.entries(input).forEach(([lang, value]) => {
+        if (lang === 'lrc_map') return;
+        const key = normalizeTranslationLangKey(value?.language || value?.lang || lang);
+        const lyrics = extractTranslationLyricsLocal(value);
+        if (key && lyrics) out[key] = lyrics;
+      });
+    }
+
+    return out;
+  };
+
+  const getRequestedTranslationLangs = () => {
+    if (!config.useTrans) return [];
+    const mainLang = normalizeTranslationLangKey(config.mainLang || 'original');
+    const subLang = normalizeTranslationLangKey(config.subLang || '');
+    const langs = [];
+    if (mainLang && mainLang !== 'original') langs.push(mainLang);
+    if (subLang && subLang !== 'original' && subLang !== mainLang) langs.push(subLang);
+    return [...new Set(langs.filter(Boolean))];
+  };
+
+  const getRequestedLrchubTranslateLangs = () => (
+    getRequestedTranslationLangs().map(toLrchubTranslateLang).filter(Boolean)
+  );
+
   async function applyTranslations(baseLines, youtubeUrl) {
     if (!config.useTrans || !Array.isArray(baseLines) || !baseLines.length) return baseLines;
     const mainLangStored = await storage.get('ytm_main_lang');
     const subLangStored = await storage.get('ytm_sub_lang');
     if (mainLangStored) config.mainLang = mainLangStored;
     if (subLangStored !== null && subLangStored !== undefined) config.subLang = subLangStored;
-    const mainLang = config.mainLang || 'original';
-    const subLang = config.subLang || '';
-    const langsToFetch = [];
-    if (mainLang && mainLang !== 'original') langsToFetch.push(mainLang);
-    if (subLang && subLang !== 'original' && subLang !== mainLang && subLang) langsToFetch.push(subLang);
+    const mainLang = normalizeTranslationLangKey(config.mainLang || 'original');
+    const subLang = normalizeTranslationLangKey(config.subLang || '');
+    const langsToFetch = getRequestedTranslationLangs();
     if (!langsToFetch.length) return baseLines;
 
-    let lrcMap = {};
+    let lrcMap = { ...(lyricsTranslationMap || {}) };
     try {
-      const res = await new Promise(resolve => {
-        chrome.runtime.sendMessage({
-          type: 'GET_TRANSLATION',
-          payload: { youtube_url: youtubeUrl, langs: langsToFetch }
-        }, resolve);
-      });
-      if (res?.success && res.lrcMap) lrcMap = res.lrcMap;
+      const missingLangs = langsToFetch.filter(lang => !lrcMap[normalizeTranslationLangKey(lang)]);
+      if (missingLangs.length) {
+        const metaNow = getMetadata();
+        const track = metaNow?.title ? metaNow.title.replace(/\s*[\(-\[].*?[\)-]].*/, '') : '';
+        const artist = metaNow?.artist || '';
+        const res = await new Promise(resolve => {
+          chrome.runtime.sendMessage({
+            type: 'GET_TRANSLATION',
+            payload: {
+              track,
+              artist,
+              youtube_url: youtubeUrl,
+              video_id: getCurrentVideoId(),
+              langs: missingLangs
+            }
+          }, resolve);
+        });
+        if (res?.success) {
+          lrcMap = {
+            ...lrcMap,
+            ...normalizeTranslationsToLrcMapLocal(res.lrcMap),
+            ...normalizeTranslationsToLrcMapLocal(res.translations)
+          };
+        }
+      }
+      lyricsTranslationMap = { ...(lyricsTranslationMap || {}), ...lrcMap };
     } catch (e) {
       console.warn('GET_TRANSLATION failed', e);
     }
@@ -1700,12 +2227,13 @@
     const needDeepL = [];
 
     langsToFetch.forEach(lang => {
-      const lrc = (lrcMap && lrcMap[lang]) || '';
+      const langKey = normalizeTranslationLangKey(lang);
+      const lrc = (lrcMap && lrcMap[langKey]) || '';
       if (lrc) {
         const parsed = parseLRCNoFlag(lrc);
-        transLinesByLang[lang] = parsed;
+        transLinesByLang[langKey] = parsed;
       } else {
-        needDeepL.push(lang);
+        needDeepL.push(langKey);
       }
     });
 
@@ -1938,12 +2466,31 @@ async function applyLyricsText(rawLyrics) {
       if (keyAtStart !== currentKey) return;
       lyricsData = [];
       hasTimestamp = false;
+      animatedCaptionData = null;
       renderLyrics([]);
       refreshMeaningUi();
       return;
     }
     lastRawLyricsText = rawLyrics;
-    let parsed = parseBaseLRC(rawLyrics);
+    const timedTextData = parseTimedTextAnimation(rawLyrics);
+    let parsed = null;
+    if (timedTextData) {
+      if (config.useAnimatedCaptions) {
+        lyricsData = timedTextData.plainLines || [];
+        dynamicLines = null;
+        duetSubDynamicLines = null;
+        renderAnimatedTimedText(timedTextData);
+        refreshMeaningUi();
+        if (meaningPanelVisible) syncMeaningPanelToPlayback(true);
+        return;
+      }
+      animatedCaptionData = null;
+      hasTimestamp = true;
+      parsed = timedTextData.plainLines || [];
+    } else {
+      animatedCaptionData = null;
+      parsed = parseBaseLRC(rawLyrics);
+    }
     const videoUrl = getCurrentVideoUrl();
 
     // duet: if sub.txt exists, hide (filter) the normal lines that match sub timestamps,
@@ -2163,16 +2710,26 @@ async function applyLyricsText(rawLyrics) {
     const payload = {
       youtube_url: getCurrentVideoUrl(),
       video_id: getCurrentVideoId(),
+      translate_to: getRequestedLrchubTranslateLangs(),
       candidate_id: getCandidateId(cand, idx),
       candidate: cand || null
     };
     console.log('[CS] GET_CANDIDATE_LYRICS request:', payload);
     const res = await safeRuntimeSendMessage({ type: 'GET_CANDIDATE_LYRICS', payload });
     console.log('[CS] GET_CANDIDATE_LYRICS response:', res);
-    if (res && res.success && typeof res.lyrics === 'string' && res.lyrics.trim()) {
+    const hasResponseLyrics = typeof res?.lyrics === 'string' && res.lyrics.trim();
+    const hasResponseAnimatedLyrics = typeof res?.animated_lyrics === 'string' && res.animated_lyrics.trim();
+    if (res && res.success && (hasResponseLyrics || hasResponseAnimatedLyrics)) {
       const next = {
         ...(cand || {}),
-        lyrics: res.lyrics,
+        lyrics: res.lyrics || cand?.lyrics || '',
+        animated_lyrics: res.animated_lyrics || cand?.animated_lyrics || null,
+        meaningData: res.meaningData || cand?.meaningData || null,
+        songSummary: res.songSummary || cand?.songSummary || null,
+        comments: Array.isArray(res.comments) ? res.comments : (Array.isArray(cand?.comments) ? cand.comments : []),
+        rating: res.rating || cand?.rating || null,
+        translations: res.translations || cand?.translations || null,
+        lrcMap: res.lrcMap || cand?.lrcMap || null,
         has_synced: typeof res.has_synced === 'boolean' ? res.has_synced : !!/\[\d+:\d{2}(?:\.\d{1,3})?\]/.test(res.lyrics)
       };
       lyricsCandidates[idx] = next;
@@ -2320,23 +2877,36 @@ async function applyLyricsText(rawLyrics) {
     if (!(typeof cand.lyrics === 'string' && cand.lyrics.trim())) {
       cand = await ensureCandidateLyricsLoaded(candId);
     }
-    if (!cand || typeof cand.lyrics !== 'string' || !cand.lyrics.trim()) {
+    const hasCandidateLyrics = typeof cand?.lyrics === 'string' && cand.lyrics.trim();
+    const hasCandidateAnimatedLyrics = typeof cand?.animated_lyrics === 'string' && cand.animated_lyrics.trim();
+    if (!cand || (!hasCandidateLyrics && !hasCandidateAnimatedLyrics)) {
       showToast('この候補の歌詞データを読み込めませんでした');
       return;
     }
+    const nextLyricsText = (config.useAnimatedCaptions && hasCandidateAnimatedLyrics)
+      ? cand.animated_lyrics
+      : cand.lyrics;
     selectedCandidateId = candId;
     dynamicLines = null;
+    lyricsTranslationMap = {
+      ...normalizeTranslationsToLrcMapLocal(cand.lrcMap),
+      ...normalizeTranslationsToLrcMapLocal(cand.translations)
+    };
+    setLyricsMeaningData(cand);
     duetSubDynamicLines = null;
     _duetExcludedTimes = new Set();
     if (currentKey) {
       storage.set(currentKey, {
         lyrics: cand.lyrics,
+        animated_lyrics: cand.animated_lyrics || null,
         dynamicLines: null,
         noLyrics: false,
+        lrcMap: lyricsTranslationMap || null,
+        meaningData: lyricsMeaning || null,
         candidateId: cand.id || candId || null
       });
     }
-    await applyLyricsText(cand.lyrics);
+    await applyLyricsText(nextLyricsText);
     const youtube_url = getCurrentVideoUrl();
     const video_id = getCurrentVideoId();
     const candidate_id = cand.id || candId;
@@ -2406,12 +2976,7 @@ async function applyLyricsText(rawLyrics) {
       });
     }
 
-    if (!Object.prototype.hasOwnProperty.call(next.byRequest, 'lock_current_sync')) {
-      next.byRequest.lock_current_sync = !!(config && (config.SyncLocked || config.syncLocked || config.ReadmeLocked || config.readmeLocked));
-    }
-    if (!Object.prototype.hasOwnProperty.call(next.byRequest, 'lock_current_dynamic')) {
-      next.byRequest.lock_current_dynamic = !!(config && (config.dynmicLock || config.dynamicLocked || config.DynamicLocked));
-    }
+    // Default lock states removed as per user request
 
     next.sync = !!next.byRequest.lock_current_sync || !!next.sync;
     next.dynamic = !!next.byRequest.lock_current_dynamic || !!next.dynamic;
@@ -2500,8 +3065,7 @@ async function applyLyricsText(rawLyrics) {
       if (mergedRequests.some(r => String(r.request || r.id || '').toLowerCase() === idLower)) return;
       mergedRequests.push({ request: id, label, target });
     };
-    ensureRequest('lock_current_sync', '同期歌詞を確定 (Lock sync)', 'sync');
-    ensureRequest('lock_current_dynamic', '動く歌詞を確定 (Lock dynamic)', 'dynamic');
+    // ensureRequest for lock_current_sync and lock_current_dynamic removed as per user request
     const activeReqs = mergedRequests.filter(r => {
       if (!r) return false;
       if (r.has_lyrics) return true;
@@ -2731,6 +3295,8 @@ async function applyLyricsText(rawLyrics) {
     if (saveOffsetStored !== null) config.saveSyncOffset = saveOffsetStored;
     const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
     if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
+    const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
+    if (animatedCaptionStored !== null) config.useAnimatedCaptions = !!animatedCaptionStored;
 
     // ★スライダー初期値反映
     const weightStored = await storage.get('ytm_lyric_weight');
@@ -2903,6 +3469,12 @@ function renderSettingsPanel() {
               </div>
               <div class="setting-row">
                 <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
+                  <span>${t('settings_animated_captions') || 'アニメーション字幕を使う'}</span>
+                  <input type="checkbox" id="animated-caption-toggle">
+                </label>
+              </div>
+              <div class="setting-row">
+                <label class="toggle-label" style="width:100%; display:flex; justify-content:space-between; align-items:center;">
                   <span>LrcLibからのフォールバック取得</span>
                   <input type="checkbox" id="lrclib-fallback-toggle">
                 </label>
@@ -3033,6 +3605,7 @@ function renderSettingsPanel() {
     document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
     document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
     document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
+    document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
     document.getElementById('lrclib-fallback-toggle').checked = !!config.useLrcLibFallback;
 
     // 共有翻訳の残り文字数（保存済み値を表示）
@@ -3081,12 +3654,14 @@ function renderSettingsPanel() {
       const savedUseTrans = await storage.get('ytm_trans_enabled');
       const savedSharedTrans = await storage.get('ytm_shared_trans_enabled');
       const savedUiLang = await storage.get('ytm_ui_lang');
+      const savedAnimatedCaptions = await storage.get('ytm_animated_captions_enabled');
 
       const prevMainLang = savedMainLang || 'original';
       const prevSubLang = savedSubLang !== null ? savedSubLang : 'en';
       const prevUseTrans = savedUseTrans !== null ? savedUseTrans : true;
       const prevUseSharedTrans = savedSharedTrans !== null ? savedSharedTrans : false;
       const prevUiLang = savedUiLang || (config.uiLang || 'ja');
+      const prevAnimatedCaptions = savedAnimatedCaptions !== null ? !!savedAnimatedCaptions : false;
 
       // 画面から値を取得
       config.deepLKey = document.getElementById('deepl-key-input').value.trim();
@@ -3094,6 +3669,7 @@ function renderSettingsPanel() {
       config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
       config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
       config.appleBg = document.getElementById('apple-bg-toggle').checked;
+      config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
       config.useLrcLibFallback = document.getElementById('lrclib-fallback-toggle').checked;
       config.lyricWeight = document.getElementById('weight-slider').value;
       config.bgBrightness = document.getElementById('bright-slider').value;
@@ -3110,6 +3686,7 @@ function renderSettingsPanel() {
       document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
       
       storage.set('ytm_apple_bg', config.appleBg);
+      storage.set('ytm_animated_captions_enabled', config.useAnimatedCaptions);
       storage.set('ytm_lrclib_fallback', config.useLrcLibFallback);
       document.body.classList.toggle('ytm-apple-bg', !!config.appleBg);
       storage.set('ytm_main_lang', config.mainLang);
@@ -3125,7 +3702,8 @@ function renderSettingsPanel() {
         prevSubLang !== config.subLang ||
         prevUseTrans !== config.useTrans ||
         prevUseSharedTrans !== config.useSharedTranslateApi ||
-        prevUiLang !== config.uiLang
+        prevUiLang !== config.uiLang ||
+        prevAnimatedCaptions !== config.useAnimatedCaptions
       );
 
       if (needReload) {
@@ -3427,7 +4005,6 @@ function renderSettingsPanel() {
     const lyricsBtnConfig = { txt: 'Lyrics', cls: 'lyrics-btn', click: () => { } };
     const meaningBtnConfig = { txt: '解説', cls: 'meaning-btn', click: () => toggleMeaningPanel() };
     const summaryBtnConfig = { txt: '要約', cls: 'meaning-summary-btn', click: () => showMeaningSummaryPopup() };
-    const shareBtnConfig = { txt: 'Share', cls: 'share-btn', click: onShareButtonClick };
 
     //  PiPボタン
     const pipBtnConfig = {
@@ -3466,7 +4043,7 @@ function renderSettingsPanel() {
     };
 
     // ボタン配列に追加
-    btns.push(lyricsBtnConfig, meaningBtnConfig, summaryBtnConfig, shareBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
+    btns.push(lyricsBtnConfig, meaningBtnConfig, summaryBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
 
     btns.forEach(b => {
       const btn = createEl('button', '', `ytm-glass-btn ${b.cls || ''}`, b.txt);
@@ -3483,9 +4060,6 @@ function renderSettingsPanel() {
       if (b === summaryBtnConfig) {
         btn.id = 'ytm-meaning-summary-btn';
         ui.summaryBtn = btn;
-      }
-      if (b === shareBtnConfig) {
-        ui.shareBtn = btn;
       }
       if (b === switchBtnConfig) {
         btn.id = 'ytm-switch-btn';
@@ -3517,7 +4091,41 @@ function renderSettingsPanel() {
     if(isYTMPremiumUser()) setupMovieMode(); //moviemode setup
   }
 
-  async function loadLyrics(meta) {
+  let lyricsLateRetryTimer = null;
+  let lyricsLateRetryKey = null;
+  const LYRICS_LATE_RETRY_DELAYS_MS = [15000, 30000];
+
+  function clearLyricsLateRetry(targetKey = null) {
+    if (targetKey && lyricsLateRetryKey && lyricsLateRetryKey !== targetKey) return;
+    if (lyricsLateRetryTimer) {
+      clearTimeout(lyricsLateRetryTimer);
+      lyricsLateRetryTimer = null;
+    }
+    lyricsLateRetryKey = null;
+  }
+
+  function scheduleLyricsLateRetry(meta, targetKey, attempt = 0) {
+    if (!targetKey || currentKey !== targetKey) return;
+    if (lyricsLateRetryTimer) return;
+    if (attempt >= LYRICS_LATE_RETRY_DELAYS_MS.length) return;
+
+    const delayMs = LYRICS_LATE_RETRY_DELAYS_MS[attempt];
+    lyricsLateRetryKey = targetKey;
+    lyricsLateRetryTimer = setTimeout(() => {
+      lyricsLateRetryTimer = null;
+      lyricsLateRetryKey = null;
+      if (currentKey !== targetKey) return;
+
+      const metaNow = getMetadata() || meta;
+      if (!metaNow) return;
+      const keyNow = `${metaNow.title}///${metaNow.artist}`;
+      if (keyNow !== targetKey) return;
+
+      loadLyrics(metaNow, { lateRetryAttempt: attempt + 1 });
+    }, delayMs);
+  }
+
+  async function loadLyrics(meta, options = {}) {
     if (!config.deepLKey) config.deepLKey = await storage.get('ytm_deepl_key');
     const cachedTrans = await storage.get('ytm_trans_enabled');
     if (cachedTrans !== null && cachedTrans !== undefined) config.useTrans = cachedTrans;
@@ -3532,6 +4140,8 @@ function renderSettingsPanel() {
     if (uiLangStored) config.uiLang = uiLangStored;
     const lrclibFallbackStored = await storage.get('ytm_lrclib_fallback');
     if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
+    const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
+    if (animatedCaptionStored !== null && animatedCaptionStored !== undefined) config.useAnimatedCaptions = !!animatedCaptionStored;
 
     const thisKey = `${meta.title}///${meta.artist}`;
     if (thisKey !== currentKey) return;
@@ -3545,6 +4155,7 @@ function renderSettingsPanel() {
     lyricsRequests = null;
     lyricsConfig = null;
     lyricsLockState = null;
+    lyricsTranslationMap = {};
     setLyricsMeaningData(null);
     let data = null;
     let noLyricsCached = false;
@@ -3554,7 +4165,11 @@ function renderSettingsPanel() {
       } else if (typeof cached === 'string') {
         data = cached;
       } else if (typeof cached === 'object') {
-        if (typeof cached.lyrics === 'string') data = cached.lyrics;
+        if (config.useAnimatedCaptions && typeof cached.animated_lyrics === 'string' && cached.animated_lyrics.trim()) {
+          data = cached.animated_lyrics;
+        } else if (typeof cached.lyrics === 'string') {
+          data = cached.lyrics;
+        }
         if (Array.isArray(cached.dynamicLines)) dynamicLines = cached.dynamicLines;
         if (typeof cached.subLyrics === 'string') duetSubLyricsRaw = cached.subLyrics;
         if (cached.noLyrics) noLyricsCached = true;
@@ -3562,6 +4177,12 @@ function renderSettingsPanel() {
         if (Array.isArray(cached.requests)) lyricsRequests = cached.requests;
         if (cached.config) lyricsConfig = cached.config;
         if (cached.lockState && typeof cached.lockState === 'object') lyricsLockState = cached.lockState;
+        if (cached.lrcMap || cached.translations) {
+          lyricsTranslationMap = {
+            ...normalizeTranslationsToLrcMapLocal(cached.lrcMap),
+            ...normalizeTranslationsToLrcMapLocal(cached.translations)
+          };
+        }
         if (cached.meaningData) setLyricsMeaningData(cached.meaningData);
       }
     }
@@ -3575,9 +4196,12 @@ function renderSettingsPanel() {
         const artist = meta.artist;
         const youtube_url = getCurrentVideoUrl();
         const video_id = getCurrentVideoId();
+        const translate_to = getRequestedLrchubTranslateLangs();
+        const payload = { track, artist, youtube_url, video_id, use_lrclib: config.useLrcLibFallback };
+        if (translate_to.length) payload.translate_to = translate_to;
         const res = await new Promise(resolve => {
           chrome.runtime.sendMessage(
-            { type: 'GET_LYRICS', payload: { track, artist, youtube_url, video_id, use_lrclib: config.useLrcLibFallback } },
+            { type: 'GET_LYRICS', payload },
             resolve
           );
         });
@@ -3586,23 +4210,35 @@ function renderSettingsPanel() {
         lyricsConfig = res?.config || null;
         syncLyricsLockState();
         lyricsCandidates = Array.isArray(res?.candidates) ? res.candidates : null;
+        lyricsTranslationMap = {
+          ...(lyricsTranslationMap || {}),
+          ...normalizeTranslationsToLrcMapLocal(res?.lrcMap),
+          ...normalizeTranslationsToLrcMapLocal(res?.translations)
+        };
         refreshCandidateMenu();
         refreshLockMenu();
-        if (res?.meaningData) setLyricsMeaningData(res.meaningData);
+        const nextMeaningData = normalizeMeaningPayloadLocal(res);
+        if (nextMeaningData) setLyricsMeaningData(nextMeaningData);
         if (typeof res?.subLyrics === 'string' && res.subLyrics.trim()) duetSubLyricsRaw = res.subLyrics;
 
-        if (res?.success && typeof res.lyrics === 'string' && res.lyrics.trim()) {
-          data = res.lyrics;
+        const responseLyrics = typeof res?.lyrics === 'string' ? res.lyrics : '';
+        const responseAnimatedLyrics = typeof res?.animated_lyrics === 'string' ? res.animated_lyrics : '';
+        const preferredLyrics = (config.useAnimatedCaptions && responseAnimatedLyrics.trim()) ? responseAnimatedLyrics : responseLyrics;
+        if (res?.success && preferredLyrics.trim()) {
+          data = preferredLyrics;
           gotLyrics = true;
           if (Array.isArray(res.dynamicLines) && res.dynamicLines.length) dynamicLines = res.dynamicLines;
           if (thisKey === currentKey) {
+            clearLyricsLateRetry(thisKey);
             storage.set(thisKey, {
-              lyrics: data,
+              lyrics: responseLyrics || data,
+              animated_lyrics: responseAnimatedLyrics || null,
               dynamicLines: dynamicLines || null,
               noLyrics: false,
               subLyrics: (typeof duetSubLyricsRaw === 'string' ? duetSubLyricsRaw : ''),
               meaningData: lyricsMeaning || null,
               candidates: lyricsCandidates || null,
+              lrcMap: lyricsTranslationMap || null,
               requests: lyricsRequests || null,
               config: lyricsConfig || null,
               lockState: lyricsLockState || null
@@ -3614,9 +4250,10 @@ function renderSettingsPanel() {
       } catch (e) {
         console.error('GET_LYRICS failed', e);
       }
-      if (!gotLyrics && thisKey === currentKey) {
+      if (!gotLyrics && !data && thisKey === currentKey) {
         storage.set(thisKey, NO_LYRICS_SENTINEL);
         noLyricsCached = true;
+        scheduleLyricsLateRetry(meta, thisKey, options.lateRetryAttempt || 0);
       }
     if (thisKey !== currentKey) return;
     if (!data) {
@@ -3706,6 +4343,8 @@ const optimizeLineBreaks = (text) => {
   };    
   function renderLyrics(data) {
     if (!ui.lyrics) return;
+    document.body.classList.remove('ytm-animated-caption-mode');
+    animatedCaptionFrameKey = '';
     ui.lyrics.innerHTML = '';
     ui.lyrics.scrollTop = 0;
     const hasData = Array.isArray(data) && data.length > 0;
@@ -3812,10 +4451,6 @@ const optimizeLineBreaks = (text) => {
       }
 
       row.onclick = () => {
-        if (shareMode) {
-          handleShareLineClick(index);
-          return;
-        }
         if (meaningPanelVisible && line && typeof line.time === 'number') {
           syncMeaningPanelToPlayback(true, line.time);
         }
@@ -3834,8 +4469,6 @@ const optimizeLineBreaks = (text) => {
         PipManager.pipWindow.document.body.classList.toggle('ytm-no-timestamp', !hasTimestamp);
       }
     }
-
-    updateShareSelectionHighlight();
   }
 
   const handleUpload = (e) => {
@@ -3870,7 +4503,10 @@ const optimizeLineBreaks = (text) => {
           if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
           t = Math.max(0, t - timeOffset);
           t = Math.min(Math.max(0, t + (config.syncOffset / 1000)), v.duration);
-          if (lyricsData.length && hasTimestamp) {
+          if (animatedCaptionData && config.useAnimatedCaptions) {
+            updateAnimatedCaptionStage(t);
+          }
+          if (!animatedCaptionData && lyricsData.length && hasTimestamp) {
             updateLyricHighlight(t);
           }
 
@@ -4094,199 +4730,6 @@ const optimizeLineBreaks = (text) => {
     }
   }
 
-  // ===================== Share 機能 =====================
-
-  function onShareButtonClick() {
-    if (!lyricsData.length) {
-      showToast('共有できる歌詞がありません');
-      return;
-    }
-    shareMode = !shareMode;
-    shareStartIndex = null;
-    shareEndIndex = null;
-    if (shareMode) {
-      document.body.classList.add('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.add('share-active');
-      showToast('共有したい歌詞の開始行と終了行をクリックしてください');
-    } else {
-      document.body.classList.remove('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.remove('share-active');
-    }
-    updateShareSelectionHighlight();
-  }
-
-  function handleShareLineClick(index) {
-    if (!shareMode) return;
-    if (!lyricsData.length) return;
-    if (shareStartIndex == null) {
-      shareStartIndex = index;
-      shareEndIndex = null;
-      updateShareSelectionHighlight();
-      return;
-    }
-    if (shareEndIndex == null) {
-      shareEndIndex = index;
-      updateShareSelectionHighlight();
-      finalizeShareSelection();
-      return;
-    }
-    shareStartIndex = index;
-    shareEndIndex = null;
-    updateShareSelectionHighlight();
-  }
-
-  function updateShareSelectionHighlight() {
-    if (!ui.lyrics) return;
-    const rows = ui.lyrics.querySelectorAll('.lyric-line');
-    rows.forEach(r => {
-      r.classList.remove('share-select');
-      r.classList.remove('share-select-range');
-      r.classList.remove('share-select-start');
-      r.classList.remove('share-select-end');
-    });
-    if (!shareMode || shareStartIndex == null || !lyricsData.length) return;
-    const max = lyricsData.length ? lyricsData.length - 1 : 0;
-    let s, e;
-    if (shareEndIndex == null) {
-      const idx = Math.max(0, Math.min(shareStartIndex, max));
-      s = idx;
-      e = idx;
-    } else {
-      const minIdx = Math.min(shareStartIndex, shareEndIndex);
-      const maxIdx = Math.max(shareStartIndex, shareEndIndex);
-      s = Math.max(0, Math.min(minIdx, max));
-      e = Math.max(0, Math.min(maxIdx, max));
-    }
-    for (let i = s; i <= e && i < rows.length; i++) {
-      const row = rows[i];
-      if (!row) continue;
-      row.classList.add('share-select-range');
-      if (i === s) row.classList.add('share-select-start');
-      if (i === e) row.classList.add('share-select-end');
-    }
-  }
-
-  function getShareSelectionInfo() {
-    if (!lyricsData.length || shareStartIndex == null) return null;
-    const max = lyricsData.length - 1;
-    let s, e;
-    if (shareEndIndex == null) {
-      const idx = Math.max(0, Math.min(shareStartIndex, max));
-      s = idx;
-      e = idx;
-    } else {
-      const minIdx = Math.min(shareStartIndex, shareEndIndex);
-      const maxIdx = Math.max(shareStartIndex, shareEndIndex);
-      s = Math.max(0, Math.min(minIdx, max));
-      e = Math.max(0, Math.min(maxIdx, max));
-    }
-    const parts = [];
-    for (let i = s; i <= e; i++) {
-      if (!lyricsData[i]) continue;
-      let t = (lyricsData[i].text || '').trim();
-      if (!t && lyricsData[i].translation) {
-        t = String(lyricsData[i].translation).trim();
-      }
-      if (t) parts.push(t);
-    }
-    const phrase = parts.join('\n');
-    let timeMs = 0;
-    if (hasTimestamp && lyricsData[s] && typeof lyricsData[s].time === 'number') {
-      timeMs = Math.round(lyricsData[s].time * 1000);
-    } else {
-      const v = document.querySelector('video');
-      if (v && typeof v.currentTime === 'number') {
-        timeMs = Math.round(v.currentTime * 1000);
-      }
-    }
-    return { phrase, timeMs };
-  }
-
-  function normalizeToHttps(url) {
-    if (!url) return url;
-    try {
-      const u = new URL(url, 'https://lrchub.coreone.work');
-      u.protocol = 'https:';
-      return u.toString();
-    } catch (e) {
-      if (url.startsWith('http://')) {
-        return 'https://' + url.slice(7);
-      }
-      return url;
-    }
-  }
-
-  function copyToClipboard(text) {
-    if (navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(text).catch(() => {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      });
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      return Promise.resolve();
-    }
-  }
-
-  async function finalizeShareSelection() {
-    const info = getShareSelectionInfo();
-    if (!info || !info.phrase) {
-      showToast('選択された歌詞が空です');
-      return;
-    }
-    const youtube_url = getCurrentVideoUrl();
-    const video_id = getCurrentVideoId();
-    const lang = (config.mainLang && config.mainLang !== 'original') ? config.mainLang : 'ja';
-    try {
-      const res = await new Promise(resolve => {
-        chrome.runtime.sendMessage(
-          { type: 'SHARE_REGISTER', payload: { youtube_url, video_id, phrase: info.phrase, lang, time_ms: info.timeMs } },
-          resolve
-        );
-      });
-      if (!res || !res.success) {
-        console.error('Share register failed:', res && res.error);
-        showToast('共有に失敗しました');
-        return;
-      }
-      let shareUrl = (res.data && res.data.share_url) || '';
-      shareUrl = normalizeToHttps(shareUrl);
-      if (!shareUrl && video_id) {
-        const sec = Math.round((info.timeMs || 0) / 1000);
-        shareUrl = `https://lrchub.coreone.work/s/${video_id}/${sec}`;
-      }
-      if (shareUrl) {
-        await copyToClipboard(shareUrl);
-        showToast('共有リンクをコピーしました');
-      } else {
-        showToast('共有リンクの取得に失敗しました');
-      }
-    } catch (e) {
-      console.error('Share register error', e);
-      showToast('共有に失敗しました');
-    } finally {
-      shareMode = false;
-      shareStartIndex = null;
-      shareEndIndex = null;
-      document.body.classList.remove('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.remove('share-active');
-      updateShareSelectionHighlight();
-    }
-  }
-
   async function sendLockRequest(requestId) {
     const youtube_url = getCurrentVideoUrl();
     const video_id = getCurrentVideoId();
@@ -4442,6 +4885,7 @@ const optimizeLineBreaks = (text) => {
         isFirstSongDetected = false;
       }
 
+      clearLyricsLateRetry();
 
       currentKey = key;
       lyricsData = [];
@@ -4453,13 +4897,9 @@ const optimizeLineBreaks = (text) => {
       lyricsRequests = null;
       lyricsConfig = null;
       lyricsLockState = null;
+      lyricsTranslationMap = {};
       setLyricsMeaningData(null);
       hideMeaningSummaryPopup();
-      shareMode = false;
-      shareStartIndex = null;
-      shareEndIndex = null;
-      document.body.classList.remove('ytm-share-select-mode');
-      if (ui.shareBtn) ui.shareBtn.classList.remove('share-active');
       lastActiveIndex = -1;
       lastScrolledIndex = -1;
       isUserScrolling = false;
@@ -4485,7 +4925,13 @@ const optimizeLineBreaks = (text) => {
       refreshCandidateMenu();
       refreshLockMenu();
       if (ui.lyrics) ui.lyrics.scrollTop = 0;
-      loadLyrics(meta);
+      setTimeout(() => {
+        if (currentKey !== key) return;
+        const metaNow = getMetadata() || meta;
+        const keyNow = `${metaNow.title}///${metaNow.artist}`;
+        if (keyNow !== key) return;
+        loadLyrics(metaNow);
+      }, 800);
     }
   };
 

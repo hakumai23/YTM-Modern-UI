@@ -624,7 +624,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 }
 
 /* 1. ベースの形 */
-#trans-toggle, #shared-trans-toggle, #sync-offset-save-toggle, #fast-mode-toggle, #left-align-toggle, #apple-bg-toggle, #lrclib-fallback-toggle {
+#trans-toggle, #shared-trans-toggle, #sync-offset-save-toggle, #fast-mode-toggle, #left-align-toggle, #apple-bg-toggle, #animated-caption-toggle, #lrclib-fallback-toggle {
   appearance: none;
   width: 38px;
   height: 22px;
@@ -636,10 +636,10 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   transition: background 0.3s ease;
   flex-shrink: 0;
 }
-#trans-toggle:checked, #shared-trans-toggle:checked, #sync-offset-save-toggle:checked, #fast-mode-toggle:checked, #left-align-toggle:checked, #apple-bg-toggle:checked, #lrclib-fallback-toggle:checked {  
+#trans-toggle:checked, #shared-trans-toggle:checked, #sync-offset-save-toggle:checked, #fast-mode-toggle:checked, #left-align-toggle:checked, #apple-bg-toggle:checked, #animated-caption-toggle:checked, #lrclib-fallback-toggle:checked {
   background: #ff0000;
 }
-#trans-toggle::after, #shared-trans-toggle::after, #sync-offset-save-toggle::after, #fast-mode-toggle::after, #left-align-toggle::after, #apple-bg-toggle::after, #lrclib-fallback-toggle::after { 
+#trans-toggle::after, #shared-trans-toggle::after, #sync-offset-save-toggle::after, #fast-mode-toggle::after, #left-align-toggle::after, #apple-bg-toggle::after, #animated-caption-toggle::after, #lrclib-fallback-toggle::after {
   content: '';
   position: absolute;
   top: 2px;
@@ -650,7 +650,7 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   border-radius: 50%;
   transition: transform 0.3s ease;
 }
-#trans-toggle:checked::after, #shared-trans-toggle:checked::after, #sync-offset-save-toggle:checked::after, #fast-mode-toggle:checked::after, #left-align-toggle:checked::after, #apple-bg-toggle:checked::after, #lrclib-fallback-toggle:checked::after {  
+#trans-toggle:checked::after, #shared-trans-toggle:checked::after, #sync-offset-save-toggle:checked::after, #fast-mode-toggle:checked::after, #left-align-toggle:checked::after, #apple-bg-toggle:checked::after, #animated-caption-toggle:checked::after, #lrclib-fallback-toggle:checked::after {
   transform: translateX(16px);
 }
 
@@ -809,6 +809,50 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   color: rgba(255, 255, 255, 0.82);
 }
 
+.ytm-meaning-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  align-self: flex-start;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ytm-meaning-summary-section,
+.ytm-meaning-comments {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ytm-meaning-summary-section-label,
+.ytm-meaning-comment-meta {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.ytm-meaning-summary-section p,
+.ytm-meaning-comment p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.8;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.ytm-meaning-comment {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .ytm-meaning-chip-group {
   display: flex;
   flex-direction: column;
@@ -896,6 +940,9 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
 
 #ytm-meaning-summary-dialog {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   width: min(640px, calc(100vw - 36px));
   max-height: 78vh;
   overflow-y: auto;
@@ -952,6 +999,45 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   display: block;
   width: 100%;
   line-height: 1.35;
+}
+
+body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
+  position: relative;
+  width: min(900px, 80vw);
+  height: 65vh;
+  padding: 0;
+  overflow: hidden;
+  mask-image: none;
+}
+
+.ytm-animated-caption-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ytm-animated-caption-cue {
+  position: absolute;
+  max-width: 96%;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: break-word;
+  font-weight: 800;
+  line-height: 1.18;
+  letter-spacing: 0;
+  animation: ytm-caption-pop 0.16s ease-out both;
+  will-change: opacity, transform;
+}
+
+@keyframes ytm-caption-pop {
+  from {
+    filter: blur(2px);
+  }
+  to {
+    filter: blur(0);
+  }
 }
 
 .lyric-line.active {
@@ -1015,37 +1101,6 @@ body.ytm-custom-layout.ytm-no-timestamp .lyric-line {
   text-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
 }
 
-/* 共有範囲選択モード */
-body.ytm-share-select-mode #my-lyrics-container {
-  cursor: default;
-}
-
-body.ytm-share-select-mode .lyric-line {
-  cursor: crosshair;
-}
-
-body.ytm-share-select-mode .lyric-line.share-select-range {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  filter: none;
-}
-
-body.ytm-share-select-mode .lyric-line.share-select-start::before,
-body.ytm-share-select-mode .lyric-line.share-select-end::before {
-  content: '';
-  position: absolute;
-  left: 16px;
-  top: 10%;
-  bottom: 10%;
-  width: 3px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.6);
-}
-
-body.ytm-share-select-mode .lyric-line.share-select-end::before {
-  background: rgba(0, 200, 255, 0.8);
-}
-
 /* Loading / 歌詞なし */
 .lyric-loading {
   display: flex;
@@ -1065,29 +1120,6 @@ body.ytm-share-select-mode .lyric-line.share-select-end::before {
 body.ytm-custom-layout ytmusic-popup-container,
 body.ytm-custom-layout ytmusic-popup-container tp-yt-iron-dropdown {
   z-index: 3000 !important;
-}
-
-/* 共有範囲ヒント */
-#ytm-share-hint {
-  position: absolute;
-  top: 18px;
-  right: 32px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: rgba(15, 15, 20, 0.9);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.6);
-  opacity: 0;
-  transform: translateY(-8px);
-  pointer-events: none;
-  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
-}
-
-body.ytm-share-select-mode #ytm-share-hint {
-  opacity: 1;
-  transform: translateY(0);
 }
 
 /* プレイヤーバー全体 */
@@ -1654,11 +1686,6 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
     max-width: 520px;
     min-width: 0;
     max-height: 34vh;
-  }
-
-  body.ytm-custom-layout #ytm-share-hint {
-    top: 70px;
-    right: 20px;
   }
 
   body.ytm-custom-layout ytmusic-player-bar {

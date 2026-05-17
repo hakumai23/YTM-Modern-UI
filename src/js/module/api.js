@@ -109,49 +109,223 @@ export const getCacheBuster = () => {
   return Math.floor(1000 + Math.random() * 9000).toString();
 };
 
+export const toLrchubTranslateLang = (lang) => {
+  const key = String(lang || '').trim().toLowerCase();
+  if (!key || key === 'original') return '';
+  if (key === 'ja' || key === 'jp') return 'JA';
+  if (key === 'en' || key === 'en-us' || key === 'en-gb') return 'EN';
+  if (key === 'ko' || key === 'kr') return 'KO';
+  if (key === 'zh' || key === 'cn' || key === 'zh-cn' || key === 'zh-tw') return 'CN';
+  return key.toUpperCase();
+};
+
+export const toUiLangKey = (lang) => {
+  const key = String(lang || '').trim().toLowerCase();
+  if (key === 'jp') return 'ja';
+  if (key === 'kr') return 'ko';
+  if (key === 'cn' || key === 'zh-cn' || key === 'zh-tw') return 'zh';
+  return key;
+};
+
+export const extractTranslationLyrics = (value) => {
+  if (typeof value === 'string') return value.trim();
+  if (!value || typeof value !== 'object') return '';
+
+  const fields = [
+    value.lyrics,
+    value.synced_lyrics,
+    value.syncedLyrics,
+    value.lrc,
+    value.plain_lyrics,
+    value.plainLyrics,
+    value.text
+  ];
+
+  for (const field of fields) {
+    if (typeof field === 'string' && field.trim()) return field.trim();
+  }
+  return '';
+};
+
+export const normalizeLrchubTranslations = (translations) => {
+  const lrcMap = {};
+  if (!translations) return lrcMap;
+
+  if (translations.lrc_map && typeof translations.lrc_map === 'object') {
+    Object.entries(translations.lrc_map).forEach(([lang, lyrics]) => {
+      const key = toUiLangKey(lang);
+      const text = extractTranslationLyrics(lyrics);
+      if (key && text) lrcMap[key] = text;
+    });
+  }
+
+  if (Array.isArray(translations)) {
+    translations.forEach((item) => {
+      if (!item) return;
+      const lang = item.language || item.lang || item.target_lang || item.targetLang;
+      const key = toUiLangKey(lang);
+      const text = extractTranslationLyrics(item);
+      if (key && text) lrcMap[key] = text;
+    });
+    return lrcMap;
+  }
+
+  if (typeof translations === 'object') {
+    Object.entries(translations).forEach(([lang, value]) => {
+      if (lang === 'lrc_map') return;
+      const key = toUiLangKey(value?.language || value?.lang || lang);
+      const text = extractTranslationLyrics(value);
+      if (key && text) lrcMap[key] = text;
+    });
+  }
+
+  return lrcMap;
+};
+
+export const normalizeLrchubMeaningPayload = (res) => {
+  if (!res || typeof res !== 'object') return null;
+
+  const explanations = Array.isArray(res.explanations)
+    ? res.explanations
+    : (Array.isArray(res.timeline_meanings) ? res.timeline_meanings : []);
+  const songSummary = (
+    (res.song_summary && typeof res.song_summary === 'object') ? res.song_summary :
+    (res.songSummary && typeof res.songSummary === 'object') ? res.songSummary :
+    null
+  );
+  const finalSummary = (res.final_summary && typeof res.final_summary === 'object') ? res.final_summary : null;
+  const comments = Array.isArray(res.comments) ? res.comments : [];
+  const rating = (res.rating && typeof res.rating === 'object') ? res.rating : null;
+
+  if (!explanations.length && !songSummary && !finalSummary && !comments.length && !rating) {
+    return null;
+  }
+
+  return {
+    title: res.display_name || res.title || res.track || '',
+    track: res.track || res.title || '',
+    artist: res.artist || res.artist_name || '',
+    explanations,
+    song_summary: songSummary,
+    final_summary: finalSummary,
+    comments,
+    rating,
+  };
+};
+
+export const normalizeLrchubLyricsResponse = (res) => {
+  if (!res || typeof res !== 'object') return null;
+
+  let lyrics = '';
+  let dynamicLines = null;
+  const animatedLyricsXml = [
+    res.animated_lyrics,
+    res.timedtext,
+    res.timed_text,
+    res.youtube_timedtext,
+    res.caption_xml,
+    res.captionXml
+  ].find(value => typeof value === 'string' && value.trim()) || '';
+
+  const dynText = res.dynamic_lrc || res.dynamic_lyrics || res.dynamicLrc || res.dynamicLyrics;
+  if (dynText) {
+    if (typeof dynText === 'string') {
+      dynamicLines = parseDynamicLrc(dynText);
+      lyrics = buildLrcFromDynamic(dynamicLines);
+    } else if (typeof dynText === 'object' && Array.isArray(dynText.lines)) {
+      dynamicLines = dynText.lines;
+      lyrics = buildLrcFromDynamic(dynamicLines);
+    }
+  }
+
+  if (!lyrics) {
+    const fields = [
+      res.synced_lyrics,
+      res.syncedLyrics,
+      res.lyrics,
+      res.lrc,
+      res.plain_lyrics,
+      res.plainLyrics,
+      res.text,
+      animatedLyricsXml
+    ];
+
+    for (const value of fields) {
+      if (typeof value === 'string' && value.trim()) {
+        lyrics = value;
+        break;
+      }
+    }
+  }
+
+  return {
+    ...res,
+    lyrics: String(lyrics || '').trim(),
+    animated_lyrics: String(animatedLyricsXml || '').trim(),
+    dynamicLines,
+    meaningData: normalizeLrchubMeaningPayload(res),
+    songSummary: res.song_summary || res.songSummary || res.final_summary || null,
+    lrcMap: {
+      ...normalizeLrchubTranslations(res.lrc_map),
+      ...normalizeLrchubTranslations(res.lrcMap),
+      ...normalizeLrchubTranslations(res.translations)
+    }
+  };
+};
+
+export const getLrchubSearchCandidates = (res) => {
+  if (Array.isArray(res)) return res.filter(Boolean);
+  if (!res || typeof res !== 'object') return [];
+
+  const candidates = [];
+  ['candidates', 'results', 'items'].forEach((key) => {
+    if (Array.isArray(res[key])) {
+      res[key].forEach(item => {
+        if (item) candidates.push(item);
+      });
+    }
+  });
+  return candidates;
+};
+
+export const getLrchubRecordId = (candidate) => {
+  if (!candidate || typeof candidate !== 'object') return null;
+  const id = (
+    candidate.record_id ||
+    candidate.recordId ||
+    candidate.candidate_id ||
+    candidate.lyrics_id ||
+    candidate.lyric_id ||
+    (candidate.record && candidate.record.id) ||
+    candidate.id
+  );
+  return id === undefined || id === null || id === '' ? null : String(id);
+};
+
 export const fetchFromLrchub = (params) => {
   const { track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source } = params;
+  const normalizedTranslateTo = Array.isArray(translate_to)
+    ? translate_to.map(toLrchubTranslateLang).filter(Boolean)
+    : toLrchubTranslateLang(translate_to);
+  const body = {
+    track,
+    artist,
+    youtube_url,
+    video_id,
+    offset_ms,
+    translation_source
+  };
+  if (Array.isArray(normalizedTranslateTo) ? normalizedTranslateTo.length : normalizedTranslateTo) {
+    body.translate_to = normalizedTranslateTo;
+  }
+
   return fetch(`https://lrchub.coreone.work/api/lyrics?_=${getCacheBuster()}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      track, 
-      artist, 
-      youtube_url, 
-      video_id, 
-      offset_ms, 
-      translate_to, 
-      translation_source 
-    }),
+    body: JSON.stringify(body),
   })
     .then(r => r.json())
-    .then(res => {
-      let lyrics = '';
-      let dynamicLines = null;
-
-      if (res.dynamic_lrc || res.dynamic_lyrics) {
-        // dynamic_lyrics might be a string (LRC) or an object (structured)
-        // Based on the spec, it looks like a string in the example
-        const dynText = res.dynamic_lrc || res.dynamic_lyrics;
-        if (typeof dynText === 'string') {
-          dynamicLines = parseDynamicLrc(dynText);
-          lyrics = buildLrcFromDynamic(dynamicLines);
-        } else if (typeof dynText === 'object' && Array.isArray(dynText.lines)) {
-          dynamicLines = dynText.lines;
-          lyrics = buildLrcFromDynamic(dynamicLines);
-        }
-      }
-
-      if (!lyrics) {
-        lyrics = res.synced_lyrics || res.lyrics || '';
-      }
-
-      return {
-        ...res,
-        lyrics: lyrics.trim(),
-        dynamicLines
-      };
-    })
+    .then(res => normalizeLrchubLyricsResponse(res))
     .catch(err => {
       console.error('[BG] LRCHub error:', err);
       return null;
@@ -172,14 +346,63 @@ export const searchLrchub = (track, artist, limit = 30) => {
     });
 };
 
+export const fetchFromLrchubSearch = async (params = {}) => {
+  const { track, artist, limit = 30, translate_to } = params;
+  if (!track) return null;
+
+  const searchRes = await searchLrchub(track, artist, limit);
+  const candidates = getLrchubSearchCandidates(searchRes);
+
+  const direct = normalizeLrchubLyricsResponse(searchRes);
+  if (direct && direct.lyrics && direct.lyrics.trim()) {
+    return {
+      ...direct,
+      candidates
+    };
+  }
+
+  for (let i = 0; i < candidates.length; i++) {
+    const cand = candidates[i];
+    const normalized = await fetchLrchubCandidateLyrics(cand, translate_to);
+    if (normalized && normalized.lyrics && normalized.lyrics.trim()) {
+      const nextCandidates = candidates.map((item, idx) => (
+        idx === i ? { ...item, lyrics: normalized.lyrics, dynamicLines: normalized.dynamicLines || null } : item
+      ));
+      return {
+        ...normalized,
+        candidates: nextCandidates
+      };
+    }
+  }
+
+  return {
+    ...(direct || (searchRes && typeof searchRes === 'object' ? searchRes : {})),
+    lyrics: '',
+    dynamicLines: null,
+    candidates
+  };
+};
+
+export const fetchLrchubCandidateLyrics = async (candidate, translate_to) => {
+  const direct = normalizeLrchubLyricsResponse(candidate);
+  if (direct && direct.lyrics && direct.lyrics.trim()) return direct;
+
+  const recordId = getLrchubRecordId(candidate);
+  if (!recordId) return null;
+
+  const recordRes = await fetchLrchubRecord(recordId, translate_to);
+  return normalizeLrchubLyricsResponse(recordRes);
+};
+
 export const fetchLrchubRecord = (record_id, translate_to) => {
   const url = new URL(`https://lrchub.coreone.work/api/record?_=${getCacheBuster()}`);
   url.searchParams.set('record_id', record_id);
   if (translate_to) {
     if (Array.isArray(translate_to)) {
-      translate_to.forEach(lang => url.searchParams.append('translate_to', lang));
+      translate_to.map(toLrchubTranslateLang).filter(Boolean).forEach(lang => url.searchParams.append('translate_to', lang));
     } else {
-      url.searchParams.set('translate_to', translate_to);
+      const normalized = toLrchubTranslateLang(translate_to);
+      if (normalized) url.searchParams.set('translate_to', normalized);
     }
   }
 
@@ -337,6 +560,11 @@ export const withTimeout = (promise, ms, label) => {
     }),
   ]);
 };
+
+export const delay = (ms) => new Promise(resolve => {
+  setTimeout(resolve, Math.max(0, ms || 0));
+});
+
 export async function fetchCommunityRemaining() {
   let lastErr = null;
   for (const url of COMMUNITY_REMAINING_ENDPOINTS) {
