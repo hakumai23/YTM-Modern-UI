@@ -488,7 +488,7 @@
           element.classList.add('inactive');
         });
       }
-    }, 1500);
+    }, 3000);
   };
   const storage = {
     _api: chrome?.storage?.local,
