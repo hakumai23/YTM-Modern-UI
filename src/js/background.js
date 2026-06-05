@@ -262,10 +262,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
   // 歌詞取得
   if (req.type === 'GET_LYRICS') {
-    const { track, artist, youtube_url, video_id, use_lrclib = true, offset_ms, translate_to, translation_source } = req.payload || {};
+    const { track, artist, youtube_url, video_id, use_lrclib = true, offset_ms, translate_to, translation_source, lyric_source_mode = 'standard' } = req.payload || {};
     const tabId = sender && sender.tab ? sender.tab.id : null;
 
-    console.log('[BG] GET_LYRICS', { track, artist });
+    console.log('[BG] GET_LYRICS', { track, artist, lyric_source_mode });
 
     (async () => {
       let responded = false;
@@ -274,6 +274,31 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         responded = true;
         sendResponse(payload);
       };
+
+      if (lyric_source_mode === 'lrclib') {
+        try {
+          const lrcLibRes = await API.fetchFromLrcLib(track, artist);
+          if (lrcLibRes && lrcLibRes.lyrics && lrcLibRes.lyrics.trim()) {
+            console.log('[BG] Won: LrcLib (LrcLib Only Mode)');
+            sendOnce({
+              success: true,
+              lyrics: lrcLibRes.lyrics,
+              dynamicLines: null,
+              subLyrics: '',
+              hasSelectCandidates: (lrcLibRes.candidates && lrcLibRes.candidates.length > 1),
+              candidates: lrcLibRes.candidates || [],
+            });
+            return;
+          }
+        } catch (e) {
+          console.warn('[BG] LrcLib fetch failed in LrcLib Only Mode:', e);
+        }
+        sendOnce({
+          success: false,
+          lyrics: '',
+        });
+        return;
+      }
 
       const pushMetaUpdate = (meta) => {
         if (!tabId) return;
@@ -309,77 +334,185 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         });
       };
 
-      const lrchubPrimaryWaitMs = 10000;
+      let primaryResolved = false;
+      let primaryResult = null;
 
-      // 1) LRCHub から取得
-      try {
-        const lrchubStartedAt = Date.now();
-        const hubRes = await API.withTimeout(
-          API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source }),
-          lrchubPrimaryWaitMs,
-          'lrchub'
-        );
-
-        if (hubRes && hubRes.lyrics && hubRes.lyrics.trim()) {
-          sendHubLyrics(hubRes, 'LRCHub');
-          return;
-        }
-
-        await API.delay(lrchubPrimaryWaitMs - (Date.now() - lrchubStartedAt));
-      } catch (e) {
-        console.warn('[BG] LRCHub fetch failed:', e);
-      }
-
-      // 2) LRCHub POST retry. This mirrors an F5 reload more closely than search.
-      try {
-        const hubRetryRes = await API.withTimeout(
-          API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source }),
-          lrchubPrimaryWaitMs,
-          'lrchub retry'
-        );
-
-        if (hubRetryRes && hubRetryRes.lyrics && hubRetryRes.lyrics.trim()) {
-          sendHubLyrics(hubRetryRes, 'LRCHub retry');
-          return;
-        }
-      } catch (e) {
-        console.warn('[BG] LRCHub retry fetch failed:', e);
-      }
-
-      // 3) LRCHub search fallback
-      try {
-        const hubSearchRes = await API.withTimeout(
-          API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to }),
-          5000,
-          'lrchub search'
-        );
-
-        if (hubSearchRes && hubSearchRes.lyrics && hubSearchRes.lyrics.trim()) {
-          sendHubLyrics(hubSearchRes, 'LRCHub search');
-          return;
-        }
-      } catch (e) {
-        console.warn('[BG] LRCHub search fetch failed:', e);
-      }
-
-      // 4) LrcLib fallback (only when enabled)
-      if (use_lrclib) {
+      const runPrimary = async () => {
         try {
-          const lrcLibRes = await API.fetchFromLrcLib(track, artist);
-          if (lrcLibRes && lrcLibRes.lyrics && lrcLibRes.lyrics.trim()) {
+          const hubRes = await API.withTimeout(
+            API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source }),
+            8000,
+            'lrchub'
+          );
+          primaryResolved = true;
+          if (hubRes && hubRes.lyrics && hubRes.lyrics.trim()) {
+            primaryResult = { source: 'LRCHub', res: hubRes };
+          }
+        } catch (e) {
+          primaryResolved = true;
+          console.warn('[BG] LRCHub fetch failed:', e);
+        }
+      };
+
+      const runFallbacks = async () => {
+        const tasks = [];
+        
+        // Task A: LRCHub search
+        const searchTask = (async () => {
+          try {
+            const hubSearchRes = await API.withTimeout(
+              API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to }),
+              5000,
+              'lrchub search'
+            );
+            if (hubSearchRes && hubSearchRes.lyrics && hubSearchRes.lyrics.trim()) {
+              return { source: 'LRCHub search', res: hubSearchRes };
+            }
+          } catch (e) {
+            console.warn('[BG] LRCHub search fetch failed:', e);
+          }
+          return null;
+        })();
+        tasks.push(searchTask);
+
+        // Task B: LRCHub retry
+        const retryTask = (async () => {
+          try {
+            const hubRetryRes = await API.withTimeout(
+              API.fetchFromLrchub({ track, artist, youtube_url, video_id, offset_ms, translate_to, translation_source }),
+              5000,
+              'lrchub retry'
+            );
+            if (hubRetryRes && hubRetryRes.lyrics && hubRetryRes.lyrics.trim()) {
+              return { source: 'LRCHub retry', res: hubRetryRes };
+            }
+          } catch (e) {
+            console.warn('[BG] LRCHub retry fetch failed:', e);
+          }
+          return null;
+        })();
+        tasks.push(retryTask);
+
+        // Task C: LrcLib (only when enabled)
+        if (use_lrclib) {
+          const lrclibTask = (async () => {
+            try {
+              const lrcLibRes = await API.fetchFromLrcLib(track, artist);
+              if (lrcLibRes && lrcLibRes.lyrics && lrcLibRes.lyrics.trim()) {
+                return { source: 'LrcLib', res: lrcLibRes };
+              }
+            } catch (e) {
+              console.warn('[BG] LrcLib fetch failed:', e);
+            }
+            return null;
+          })();
+          tasks.push(lrclibTask);
+        }
+
+        return new Promise(resolve => {
+          let resolved = false;
+          let pendingCount = tasks.length;
+          if (pendingCount === 0) {
+            resolve(null);
+            return;
+          }
+          tasks.forEach(t => {
+            t.then(result => {
+              pendingCount--;
+              if (result && !resolved) {
+                resolved = true;
+                resolve(result);
+              } else if (pendingCount === 0 && !resolved) {
+                resolve(null);
+              }
+            });
+          });
+        });
+      };
+
+      const primaryTask = runPrimary();
+
+      // Phase 1: Wait up to 1.5s for primary
+      await Promise.race([
+        primaryTask,
+        API.delay(1500)
+      ]);
+
+      if (primaryResult) {
+        sendHubLyrics(primaryResult.res, primaryResult.source);
+        return;
+      }
+
+      // Phase 2: Start fallbacks immediately if primary failed/returned empty, or after 1.5s if pending
+      const fallbackTask = runFallbacks();
+
+      if (!primaryResolved) {
+        // Wait for whichever resolves first with a valid result, primary or any fallback.
+        // If one fails (returns null), we keep waiting for the other.
+        const winner = await new Promise(resolve => {
+          let resolved = false;
+          let pending = 2;
+          const check = (result) => {
+            pending--;
+            if (result && !resolved) {
+              resolved = true;
+              resolve(result);
+            } else if (pending === 0 && !resolved) {
+              resolve(null);
+            }
+          };
+          (async () => {
+            await primaryTask;
+            return primaryResult;
+          })().then(check);
+          fallbackTask.then(check);
+        });
+
+        if (winner) {
+          if (winner.source === 'LrcLib') {
+            // LrcLib completed first, but let's give primary up to 800ms more since it's richer
+            await Promise.race([
+              primaryTask,
+              API.delay(800)
+            ]);
+            if (primaryResult) {
+              sendHubLyrics(primaryResult.res, primaryResult.source);
+              return;
+            }
+            
             console.log('[BG] Won: LrcLib');
             sendOnce({
               success: true,
-              lyrics: lrcLibRes.lyrics,
+              lyrics: winner.res.lyrics,
               dynamicLines: null,
               subLyrics: '',
-              hasSelectCandidates: (lrcLibRes.candidates && lrcLibRes.candidates.length > 1),
-              candidates: lrcLibRes.candidates || [],
+              hasSelectCandidates: (winner.res.candidates && winner.res.candidates.length > 1),
+              candidates: winner.res.candidates || [],
             });
             return;
+          } else {
+            sendHubLyrics(winner.res, winner.source);
+            return;
           }
-        } catch (e) {
-          console.warn('[BG] LrcLib fetch failed:', e);
+        }
+      } else {
+        const winner = await fallbackTask;
+        if (winner) {
+          if (winner.source === 'LrcLib') {
+            console.log('[BG] Won: LrcLib');
+            sendOnce({
+              success: true,
+              lyrics: winner.res.lyrics,
+              dynamicLines: null,
+              subLyrics: '',
+              hasSelectCandidates: (winner.res.candidates && winner.res.candidates.length > 1),
+              candidates: winner.res.candidates || [],
+            });
+            return;
+          } else {
+            sendHubLyrics(winner.res, winner.source);
+            return;
+          }
         }
       }
 
