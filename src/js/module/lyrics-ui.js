@@ -13,7 +13,7 @@ const resolveDeepLTargetLang = (lang) => {
 
 const parseLRCInternal = (lrc) => {
   if (!lrc) return { lines: [], hasTs: false };
-  const tagTest = /\[\d{2}:\d{2}\.\d{2,3}\]/;
+  const tagTest = /\[\s*\d{1,2}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/;
 
   // タイムスタンプがない場合
   if (!tagTest.test(lrc)) {
@@ -25,44 +25,35 @@ const parseLRCInternal = (lrc) => {
     return { lines, hasTs: false };
   }
 
-  // タイムスタンプがある場合
-  const tagExp = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/g;
+  const lines = lrc.split(/\r?\n/);
   const result = [];
-  let match;
-  let lastTime = null;
-  let lastIndex = 0;
+  const tagExp = /\[\s*(\d{1,2})\s*:\s*(\d{2})\s*(?:[.:]\s*(\d{1,4})\s*)?\]/g;
 
-  while ((match = tagExp.exec(lrc)) !== null) {
-    const min = parseInt(match[1], 10);
-    const sec = parseInt(match[2], 10);
-    const fracStr = match[3];
-    const frac = parseInt(fracStr, 10) / (fracStr.length === 2 ? 100 : 1000);
-    const time = min * 60 + sec + frac;
+  lines.forEach(lineStr => {
+    const line = (lineStr ?? '').trim();
+    if (!line) return;
 
-    if (lastTime !== null) {
-      const rawText = lrc.slice(lastIndex, match.index);
-      const cleaned = rawText.replace(/\r?\n/g, ' ');
-      const text = cleaned.trim();
-      const hasLineBreak = /[\r\n]/.test(rawText);
-      if (text || hasLineBreak) {
-        result.push({ time: lastTime, text });
-      }
+    // Extract all tags on this line
+    const tags = [];
+    let match;
+    tagExp.lastIndex = 0;
+    while ((match = tagExp.exec(line)) !== null) {
+      const min = parseInt(match[1], 10);
+      const sec = parseInt(match[2], 10);
+      const fracStr = match[3] || '0';
+      const frac = parseFloat('0.' + fracStr);
+      const time = min * 60 + sec + frac;
+      tags.push(time);
     }
-    lastTime = time;
-    lastIndex = tagExp.lastIndex;
-  }
 
-  // 最後の行の処理
-  if (lastTime !== null && lastIndex < lrc.length) {
-    const rawText = lrc.slice(lastIndex);
-    const cleaned = rawText.replace(/\r?\n/g, ' ');
-    const text = cleaned.trim();
-    // ★修正: 空行(明示的な改行のみ)も保持してタイムスタンプのズレを防ぐ
-    const hasLineBreak = /[\r\n]/.test(rawText);
-    if (text || hasLineBreak) {
-      result.push({ time: lastTime, text });
+    if (tags.length > 0) {
+      // Strip all tags to get the line text
+      const text = line.replace(/\[\s*\d{1,2}\s*:\s*\d{2}\s*(?:[.:]\s*\d{1,4}\s*)?\]/g, '').trim();
+      tags.forEach(time => {
+        result.push({ time, text });
+      });
     }
-  }
+  });
 
   result.sort((a, b) => (a.time || 0) - (b.time || 0));
   return { lines: result, hasTs: true };
@@ -1782,7 +1773,7 @@ const getCurrentPlaybackTimeSec = () => {
   const v = document.querySelector('video');
   if (!v || typeof v.currentTime !== 'number' || Number.isNaN(v.currentTime)) return null;
   let t = v.currentTime;
-  if (!(timeOffset > 0 && t < timeOffset)) {
+  if (!hasTimestamp && !(timeOffset > 0 && t < timeOffset)) {
     t = Math.max(0, t - timeOffset);
   }
   const duration = Number.isFinite(v.duration) ? v.duration : null;
@@ -1937,7 +1928,7 @@ function renderMeaningPanel(index = null) {
             <div class="ytm-meaning-panel-eyebrow">解説</div>
             <div class="ytm-meaning-panel-title">${escapeHtml(getMeaningDisplayTitle())}</div>
           </div>
-          <button class="ytm-meaning-close-btn" type="button" aria-label="Close">×</button>
+          <button class="ytm-meaning-close-btn ytm-unified-close-btn size-36" type="button" aria-label="Close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="ytm-meaning-panel-body">
           <p class="ytm-meaning-panel-text">${escapeHtml(fallbackText)}</p>
@@ -1955,7 +1946,7 @@ function renderMeaningPanel(index = null) {
             <div class="ytm-meaning-panel-range">${escapeHtml(segment.start || '--:--')} - ${escapeHtml(segment.end || '--:--')}</div>
             <div class="ytm-meaning-panel-title">${escapeHtml(segment.label || 'Lyric Meaning')}</div>
           </div>
-          <button class="ytm-meaning-close-btn" type="button" aria-label="Close">×</button>
+          <button class="ytm-meaning-close-btn ytm-unified-close-btn size-36" type="button" aria-label="Close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="ytm-meaning-panel-body">
           ${segment.summary ? `<p class="ytm-meaning-panel-summary">${escapeHtml(segment.summary)}</p>` : ''}
@@ -2063,7 +2054,7 @@ function showMeaningSummaryPopup() {
   const structuredSummaryHtml = buildMeaningSummarySectionsHtml();
 
   ui.meaningSummaryDialog.innerHTML = `
-      <button class="ytm-meaning-summary-close" type="button" aria-label="Close">×</button>
+      <button class="ytm-meaning-summary-close ytm-unified-close-btn size-36" type="button" aria-label="Close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <div class="ytm-meaning-summary-eyebrow">要約</div>
       <div class="ytm-meaning-summary-title">${escapeHtml(getMeaningDisplayTitle())}</div>
       ${buildMeaningRatingHtml()}
@@ -2103,7 +2094,7 @@ function setupScrollResumeEvents() {
     clearTimeout(userScrollTimeout);
     userScrollTimeout = setTimeout(() => {
       isUserScrolling = false;
-      lastScrolledIndex = -1; // 復帰時に強制スクロールさせるためリセット
+      if (ui.lyrics) ui.lyrics._lastScrolledIndex = -1; // 復帰時に強制スクロールさせるためリセット
     }, 3000);
   };
 
@@ -2554,6 +2545,10 @@ async function applyLyricsText(rawLyrics) {
       dynamicLines = normalizeDynamicLinesToCharLevel(dynamicLines);
     }
   } catch (e) { }
+
+  if (hasTimestamp) {
+    timeOffset = 0;
+  }
 
   lyricsData = finalLines;
   renderLyrics(finalLines);
@@ -3318,6 +3313,8 @@ async function initSettings() {
   if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
   const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
   if (animatedCaptionStored !== null) config.useAnimatedCaptions = !!animatedCaptionStored;
+  const sourceModeStored = await storage.get('ytm_lyric_source_mode');
+  config.lyricSourceMode = sourceModeStored || 'standard';
 
   // ★スライダー初期値反映
   const weightStored = await storage.get('ytm_lyric_weight');
@@ -3462,7 +3459,7 @@ function renderSettingsPanel() {
       <div class="settings-panels">
         <div class="settings-panels-header">
           <h3>${t('settings_title')}</h3>
-          <button id="ytm-settings-close-btn" title="Close">×</button>
+          <button id="ytm-settings-close-btn" class="ytm-unified-close-btn size-32" title="Close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         
         <div class="settings-scroll-area">
@@ -3518,6 +3515,16 @@ function renderSettingsPanel() {
                 <input type="range" id="bright-slider" min="0.1" max="1.0" step="0.05" value="${config.bgBrightness || 0.35}">
               </div>
             </div>
+
+            <div class="settings-group-card">
+              <div class="setting-row" style="flex-direction:column; align-items:flex-start; gap:8px;">
+                <div class="ytm-lang-label">歌詞ソースモード (Lyric Source Mode)</div>
+                <div class="ytm-lang-group" id="lyric-source-group">
+                  <button class="ytm-lang-pill" data-value="standard">標準</button>
+                  <button class="ytm-lang-pill" data-value="lrclib">高速 (LrcLibのみ)</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div class="settings-panel" id="panel-translation">
@@ -3568,6 +3575,8 @@ function renderSettingsPanel() {
                </div>
             </div>
             
+
+
             <div class="settings-group-card">
                <div class="setting-row" style="flex-direction:column; align-items:stretch; gap:12px;">
                   <div style="width:100%; display:flex; justify-content:space-between; align-items:center;">
@@ -3585,12 +3594,20 @@ function renderSettingsPanel() {
           <div class="settings-panel" id="panel-data">
             <div class="settings-section-title">Data Management</div>
             <div class="settings-group-card">
-              <div class="setting-row" style="display:block;">
+              <div class="setting-row" style="display:block; margin-bottom:14px;">
                 <button id="delete-current-cache-btn" class="settings-action-btn btn-danger" ${hasCurrentSong ? '' : 'disabled style="opacity:0.5; cursor:not-allowed;"'} style="display:flex; align-items:center; justify-content:center; gap:8px;">
                   ${ICONS.trash} この曲の歌詞データを削除
                 </button>
                 <div style="font-size:11px; opacity:0.5; margin-top:8px; text-align:center;">
                   現在再生中の曲の歌詞キャッシュのみを削除します
+                </div>
+              </div>
+              <div class="setting-row" style="display:block; margin-bottom:14px;">
+                <button id="clear-all-lyrics-cache-btn" class="settings-action-btn btn-danger" style="display:flex; align-items:center; justify-content:center; gap:8px; background:#ff3b30; color:#fff;">
+                  ${ICONS.trash} すべての歌詞データを削除
+                </button>
+                <div style="font-size:11px; opacity:0.5; margin-top:8px; text-align:center;">
+                  保存されているすべての歌詞データを削除します（設定は保持されます）
                 </div>
               </div>
               <div class="setting-row" style="display:block;">
@@ -3657,6 +3674,7 @@ function renderSettingsPanel() {
   // 言語ピル設定
   setupLangPills('main-lang-group', config.mainLang, v => { config.mainLang = v; });
   setupLangPills('sub-lang-group', config.subLang, v => { config.subLang = v; });
+  setupLangPills('lyric-source-group', config.lyricSourceMode || 'standard', v => { config.lyricSourceMode = v; });
   refreshUiLangGroup();
 
   // 閉じるボタン
@@ -3676,6 +3694,7 @@ function renderSettingsPanel() {
     const savedSharedTrans = await storage.get('ytm_shared_trans_enabled');
     const savedUiLang = await storage.get('ytm_ui_lang');
     const savedAnimatedCaptions = await storage.get('ytm_animated_captions_enabled');
+    const savedSourceMode = await storage.get('ytm_lyric_source_mode');
 
     const prevMainLang = savedMainLang || 'original';
     const prevSubLang = savedSubLang !== null ? savedSubLang : 'en';
@@ -3683,6 +3702,7 @@ function renderSettingsPanel() {
     const prevUseSharedTrans = savedSharedTrans !== null ? savedSharedTrans : false;
     const prevUiLang = savedUiLang || (config.uiLang || 'ja');
     const prevAnimatedCaptions = savedAnimatedCaptions !== null ? !!savedAnimatedCaptions : false;
+    const prevSourceMode = savedSourceMode || 'standard';
 
     // 画面から値を取得
     config.deepLKey = document.getElementById('deepl-key-input').value.trim();
@@ -3717,6 +3737,7 @@ function renderSettingsPanel() {
     storage.set('ytm_bg_brightness', config.bgBrightness);
     storage.set('ytm_sync_offset', config.syncOffset);
     storage.set('ytm_save_sync_offset', config.saveSyncOffset);
+    storage.set('ytm_lyric_source_mode', config.lyricSourceMode);
 
     const needReload = (
       prevMainLang !== config.mainLang ||
@@ -3724,7 +3745,8 @@ function renderSettingsPanel() {
       prevUseTrans !== config.useTrans ||
       prevUseSharedTrans !== config.useSharedTranslateApi ||
       prevUiLang !== config.uiLang ||
-      prevAnimatedCaptions !== config.useAnimatedCaptions
+      prevAnimatedCaptions !== config.useAnimatedCaptions ||
+      prevSourceMode !== config.lyricSourceMode
     );
 
     if (needReload) {
@@ -3738,6 +3760,24 @@ function renderSettingsPanel() {
 
   // リセットボタン
   document.getElementById('clear-all-btn').onclick = storage.clear;
+
+  // すべての歌詞データを削除ボタンの処理
+  const clearLyricsBtn = document.getElementById('clear-all-lyrics-cache-btn');
+  if (clearLyricsBtn) {
+    clearLyricsBtn.onclick = async () => {
+      if (confirm('保存されているすべての歌詞データを削除しますか？\n（設定や再生履歴は保持されます）')) {
+        if (!chrome?.storage?.local) return;
+        chrome.storage.local.get(null, async (items) => {
+          const keysToDelete = Object.keys(items).filter(k => k.includes('///'));
+          if (keysToDelete.length > 0) {
+            await new Promise(resolve => chrome.storage.local.remove(keysToDelete, resolve));
+          }
+          showToast('すべての歌詞キャッシュを削除しました');
+          location.reload();
+        });
+      }
+    };
+  }
 
   // キャッシュ削除ボタンの処理
   const delBtn = document.getElementById('delete-current-cache-btn');
@@ -3769,7 +3809,7 @@ function renderSettingsPanel() {
 
 function createReplayPanel() {
   ui.replayPanel = createEl('div', 'ytm-replay-panel', '', `
-      <button class="replay-close-btn">×</button>
+      <button class="replay-close-btn ytm-unified-close-btn size-40"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <h3>Daily Replay</h3>
       
       <div class="ytm-lang-group" style="margin-bottom: 20px;">
@@ -3911,7 +3951,7 @@ function setupSwitchPanel(triggerBtn) {
   panel.innerHTML = `
       <div class="ytm-switch-header">
         <span>🔄 代替バージョンを検索: ${escHtml(meta.title)}</span>
-        <button class="ytm-switch-close" id="ytm-switch-close">✕</button>
+        <button class="ytm-switch-close ytm-unified-close-btn size-26" id="ytm-switch-close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
       <div class="ytm-switch-list" id="ytm-switch-list">
         <div class="ytm-switch-loading">検索中…</div>
@@ -4163,10 +4203,13 @@ async function loadLyrics(meta, options = {}) {
   if (lrclibFallbackStored !== null) config.useLrcLibFallback = lrclibFallbackStored;
   const animatedCaptionStored = await storage.get('ytm_animated_captions_enabled');
   if (animatedCaptionStored !== null && animatedCaptionStored !== undefined) config.useAnimatedCaptions = !!animatedCaptionStored;
+  const sourceModeStored = await storage.get('ytm_lyric_source_mode');
+  if (sourceModeStored) config.lyricSourceMode = sourceModeStored;
 
   const thisKey = `${meta.title}///${meta.artist}`;
   if (thisKey !== currentKey) return;
   let cached = await storage.get(thisKey);
+  if (thisKey !== currentKey) return;
   dynamicLines = null;
   duetSubDynamicLines = null;
   _duetExcludedTimes = new Set();
@@ -4210,6 +4253,18 @@ async function loadLyrics(meta, options = {}) {
   syncLyricsLockState();
   refreshCandidateMenu();
   refreshLockMenu();
+
+  let renderedFromCache = false;
+  if (data && thisKey === currentKey) {
+    applyLyricsText(data).then(() => {
+      if (thisKey === currentKey) {
+        refreshMeaningUi();
+      }
+    });
+    renderedFromCache = true;
+  }
+  let needsRendering = !renderedFromCache;
+
   // Always fetch fresh data from URL as requested
   let gotLyrics = false;
   try {
@@ -4218,7 +4273,7 @@ async function loadLyrics(meta, options = {}) {
     const youtube_url = getCurrentVideoUrl();
     const video_id = getCurrentVideoId();
     const translate_to = getRequestedLrchubTranslateLangs();
-    const payload = { track, artist, youtube_url, video_id, use_lrclib: config.useLrcLibFallback };
+    const payload = { track, artist, youtube_url, video_id, use_lrclib: config.useLrcLibFallback, lyric_source_mode: config.lyricSourceMode || 'standard' };
     if (translate_to.length) payload.translate_to = translate_to;
     const res = await new Promise(resolve => {
       chrome.runtime.sendMessage(
@@ -4226,6 +4281,7 @@ async function loadLyrics(meta, options = {}) {
         resolve
       );
     });
+    if (thisKey !== currentKey) return;
     console.log('[CS] GET_LYRICS response:', res);
     lyricsRequests = Array.isArray(res?.requests) ? res.requests : null;
     lyricsConfig = res?.config || null;
@@ -4246,6 +4302,10 @@ async function loadLyrics(meta, options = {}) {
     const responseAnimatedLyrics = typeof res?.animated_lyrics === 'string' ? res.animated_lyrics : '';
     const preferredLyrics = (config.useAnimatedCaptions && responseAnimatedLyrics.trim()) ? responseAnimatedLyrics : responseLyrics;
     if (res?.success && preferredLyrics.trim()) {
+      const isDifferent = (preferredLyrics !== data) || 
+                          (JSON.stringify(res.dynamicLines) !== JSON.stringify(dynamicLines)) ||
+                          (res.subLyrics && res.subLyrics !== duetSubLyricsRaw);
+
       data = preferredLyrics;
       gotLyrics = true;
       if (Array.isArray(res.dynamicLines) && res.dynamicLines.length) dynamicLines = res.dynamicLines;
@@ -4264,6 +4324,9 @@ async function loadLyrics(meta, options = {}) {
           config: lyricsConfig || null,
           lockState: lyricsLockState || null
         });
+        if (isDifferent || !renderedFromCache) {
+          needsRendering = true;
+        }
       }
     } else {
 
@@ -4284,7 +4347,9 @@ async function loadLyrics(meta, options = {}) {
     refreshMeaningUi();
     return;
   }
-  await applyLyricsText(data);
+  if (needsRendering) {
+    await applyLyricsText(data);
+  }
 }
 
 const optimizeLineBreaks = (text) => {
@@ -4477,7 +4542,7 @@ function renderLyrics(data) {
       }
       if (!hasTimestamp || !line || line.time == null) return;
       const v = document.querySelector('video');
-      if (v) v.currentTime = line.time + timeOffset;
+      if (v) v.currentTime = line.time + (hasTimestamp ? 0 : timeOffset);
     };
     fragment.appendChild(row);
   });
@@ -4521,8 +4586,10 @@ function startLyricRafLoop() {
         let t = v.currentTime;
         const duration = v.duration || 1;
 
-        if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
-        t = Math.max(0, t - timeOffset);
+        if (!hasTimestamp) {
+          if (timeOffset > 0 && t < timeOffset) timeOffset = 0;
+          t = Math.max(0, t - timeOffset);
+        }
         t = Math.min(Math.max(0, t + (config.syncOffset / 1000)), v.duration);
         if (animatedCaptionData && config.useAnimatedCaptions) {
           updateAnimatedCaptionStage(t);
@@ -4677,8 +4744,9 @@ function updateLyricHighlight(currentTime) {
           r.classList.add('active');
         }
 
-        if (isPrimary && !isUserScrolling && idx !== lastScrolledIndex) {
+        if (isPrimary && idx !== (container._lastScrolledIndex ?? -1)) {
           if (container === ui.lyrics) {
+            if (isUserScrolling) return;
             // 【通常再生画面】
             // getBoundingClientRect を使って要素の絶対位置から確実なスクロール量を計算
             const containerRect = container.getBoundingClientRect();
@@ -4693,23 +4761,20 @@ function updateLyricHighlight(currentTime) {
 
             container.scrollTo({ top: targetScroll, behavior: 'smooth' });
 
-            lastScrolledIndex = idx;
+            container._lastScrolledIndex = idx;
             ReplayManager.incrementLyricCount();
           } else {
             // 【PIP（小窓）】
+            if (container._isUserScrolling) return;
+
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
             const targetScroll = container.scrollTop + rRect.top - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
 
-            isProgrammaticScrolling = true;
-            clearTimeout(programmaticScrollTimeout);
-            clearTimeout(programmaticScrollMaxTimeout);
-            programmaticScrollTimeout = setTimeout(() => { isProgrammaticScrolling = false; }, 150);
-            programmaticScrollMaxTimeout = setTimeout(() => { isProgrammaticScrolling = false; }, 1200);
-
+            container._isProgrammaticScrolling = true;
             container.scrollTo({ top: targetScroll, behavior: 'smooth' });
 
-            lastScrolledIndex = idx;
+            container._lastScrolledIndex = idx;
           }
         }
 
@@ -4816,6 +4881,11 @@ function setupPlayerBarBlankClickGuard() {
 }
 
 const tick = async () => {
+  // Update PIP window state on every player bar mutation (in real-time)
+  if (PipManager && PipManager.pipWindow) {
+    PipManager.updateLikeState();
+  }
+
   if (document.querySelector('.ad-interrupting') || document.querySelector('.ad-showing')) return;
 
   let toggleBtn = document.getElementById('my-mode-toggle');
@@ -4923,6 +4993,10 @@ const tick = async () => {
     hideMeaningSummaryPopup();
     lastActiveIndex = -1;
     lastScrolledIndex = -1;
+    if (ui.lyrics) ui.lyrics._lastScrolledIndex = -1;
+    if (PipManager && PipManager.pipLyricsContainer) {
+      PipManager.pipLyricsContainer._lastScrolledIndex = -1;
+    }
     isUserScrolling = false;
     if (userScrollTimeout) clearTimeout(userScrollTimeout);
     isProgrammaticScrolling = false;
@@ -4941,6 +5015,12 @@ const tick = async () => {
     if (PipManager) {
       PipManager.updateMeta(meta.title, meta.artist);
       PipManager.resetLyrics(); // ここで歌詞を一旦消す
+      // Schedule a delayed update check to ensure player bar DOM is fully updated by YTM
+      setTimeout(() => {
+        if (PipManager && PipManager.pipWindow) {
+          PipManager.updateLikeState();
+        }
+      }, 1000);
     }
 
     refreshCandidateMenu();
