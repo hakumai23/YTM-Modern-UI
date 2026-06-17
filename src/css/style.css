@@ -26,10 +26,17 @@
   display: none;
   overflow: hidden;
 
-  /* デフォルト（従来）の背景スタイル */
-  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
+  /* 繝�ヵ繧ｩ繝ｫ繝茨ｼ亥ｾ捺擂�峨�閭梧勹繧ｹ繧ｿ繧､繝ｫ: 蝓ｺ譛ｬ縺ｯ譏主ｺｦ繝ｻ蠖ｩ蠎ｦ縺ｮ隱ｿ謨ｴ縺ｮ縺ｿ縺ｧ縲；PU雋�闕ｷ縺ｮ髱槫ｸｸ縺ｫ螟ｧ縺阪＞CSS blur縺ｯ辟｡蜉ｹ蛹� (JS蛛ｴ縺ｧ莠句燕縺ｼ縺九＠蜃ｦ逅�ｒ螳滓命) */
+  filter: brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
   transform: scale(1.1);
-  animation: ytmBgDrift 40s linear infinite alternate;
+  will-change: transform;
+  animation: none;
+}
+
+/* フォールバック用CSSブラー: キャンバスの事前処理がCORS等で動作しなかった場合のみ、従来のCSS blurを使用 */
+#ytm-custom-bg:not([style*="data:"]) {
+  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.35)) saturate(140%);
+  animation: none !important;
 }
 
 body.ytm-custom-layout #ytm-custom-bg {
@@ -38,9 +45,22 @@ body.ytm-custom-layout #ytm-custom-bg {
 
 
 body.ytm-apple-bg #ytm-custom-bg {
-  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4));
+  /* 本来はCSS blurを非表示 */
+  filter: saturate(120%) brightness(var(--ytm-bg-brightness, 0.4));
   transform: scale(1.2);
   animation: none;
+}
+
+/* フォールバック用CSSブラー: キャンバスの事前処理がCORS等で動作しなかった場合のみ、従来のCSS blurを使用 */
+body.ytm-apple-bg #ytm-custom-bg:not([style*="data:"]) {
+  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4));
+  transform: scale(12);
+  animation: none;
+}
+
+body.ytm-apple-bg #ytm-custom-bg:not([style*="data:"])::before,
+body.ytm-apple-bg #ytm-custom-bg:not([style*="data:"])::after {
+  animation: none !important;
 }
 
 body.ytm-apple-bg #ytm-custom-bg::before {
@@ -55,7 +75,8 @@ body.ytm-apple-bg #ytm-custom-bg::before {
   background-position: center;
   opacity: 0.5;
   border-radius: 40%;
-  animation: amFluid1 25s infinite alternate ease-in-out;
+  will-change: transform;
+  animation: none;
 }
 
 body.ytm-apple-bg #ytm-custom-bg::after {
@@ -70,8 +91,9 @@ body.ytm-apple-bg #ytm-custom-bg::after {
   background-position: center;
   opacity: 0.4;
   border-radius: 45%;
-  /* mix-blend-modeを外して優しく重ねる */
-  animation: amFluid2 30s infinite alternate-reverse ease-in-out;
+  /* mix-blend-mode繧貞､悶＠縺ｦ蜆ｪ縺励￥驥阪繧 */
+  will-change: transform;
+  animation: none;
 }
 
 @keyframes amFluid1 {
@@ -198,14 +220,13 @@ body.ytm-custom-layout ytmusic-nav-bar {
   left: 10%;
   width: 80%;
   height: 64px;
-  background: rgba(0, 0, 0, 0.6) !important;
-  backdrop-filter: blur(10px);
+  background: rgba(15, 15, 15, 0.92) !important;
+  /* backdrop-filter: blur(10px); */
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   z-index: 2100 !important;
   border-radius: 20px;
   padding-left: 10px;
   padding-right: 10px;
-  background: rgba(0, 0, 0, 0.5) !important;
 
   transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.2, 0, 0, 1), background 0.3s;
   transform: translateY(-20px);
@@ -301,8 +322,8 @@ body.ytm-custom-layout .av-toggle.ytmusic-av-toggle {
   border-color: rgba(255, 255, 255, 0.15);
   border-image: initial;
   height: 40px;
-  background: rgba(200, 200, 200, 0.1);
-  backdrop-filter: blur(20px) saturate(100%);
+  background: rgba(20, 20, 20, 0.85);
+  /* backdrop-filter: blur(20px) saturate(100%); */
 }
 
 body.ytm-custom-layout .song-button.ytmusic-av-toggle,
@@ -450,13 +471,13 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 .ytm-glass-btn {
   padding: 8px 16px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 20px;
   color: #fff;
   cursor: pointer;
   font-weight: 700;
-  backdrop-filter: blur(20px);
+  /* backdrop-filter: blur(20px); */
   font-size: 13px;
   transition: 0.2s;
 }
@@ -475,65 +496,80 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 /* ===================== Settings Panel  ===================== */
 #ytm-settings-panel {
+  /* パネル内で使うアクセントカラー */
+  --acc: #ff2d55;
+  --acc-soft: rgba(255, 45, 85, 0.16);
+
   position: fixed;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%) scale(0.95);
+  transform: translate(-50%, -50%) scale(0.96) translateY(8px);
   width: 840px;
-  /* ★ 720px から拡大 */
   height: 620px;
-  /* ★ 540px から拡大 */
   display: none;
   flex-direction: row;
-  /* 横並びにする */
-  background: rgba(20, 20, 24, 0.95);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(20, 20, 24, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 24px;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+  /* 2つ目のshadowで背面全体を薄く暗くする（疑似バックドロップ） */
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.7),
+    0 0 0 200vmax rgba(0, 0, 0, 0.45);
   color: #fff;
   z-index: 99999;
   overflow: hidden;
   opacity: 0;
-  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.25s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 #ytm-settings-panel.active {
   display: flex;
   opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
+  transform: translate(-50%, -50%) scale(1) translateY(0);
 }
 
-/* --- 左側：タブナビゲーション --- */
+/* --- 蟾ｦ蛛ｴ�壹ち繝悶リ繝薙ご繝ｼ繧ｷ繝ｧ繝ｳ --- */
 .settings-tabs {
-  width: 240px;
-  /* ★ 220px から拡大 */
-  background: rgba(0, 0, 0, 0.2);
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
-  padding: 30px 15px;
+  width: 232px;
+  background: rgba(0, 0, 0, 0.25);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 26px 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
 .settings-tabs-header {
-  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 18px;
+  padding-left: 12px;
+}
+
+.settings-app-name {
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: #fff;
+}
+
+.settings-app-caption {
+  font-size: 10px;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.4);
+  color: rgba(255, 255, 255, 0.38);
   text-transform: uppercase;
-  letter-spacing: 1px;
-  margin-bottom: 12px;
-  padding-left: 10px;
+  letter-spacing: 1.4px;
 }
 
 .settings-tab-btn {
+  position: relative;
   background: transparent;
   border: none;
-  color: rgba(255, 255, 255, 0.6);
-  padding: 12px 14px;
-  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.58);
+  padding: 11px 14px;
+  border-radius: 11px;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -541,11 +577,11 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   font-size: 13px;
   font-weight: 600;
   text-align: left;
-  transition: all 0.2s;
+  transition: background 0.18s ease, color 0.18s ease;
 }
 
 .settings-tab-btn:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.06);
   color: #fff;
 }
 
@@ -554,18 +590,82 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   color: #fff;
 }
 
+/* アクティブタブの左端にアクセントバー */
+.settings-tab-btn.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--acc, #ff2d55);
+}
+
 .settings-tab-btn svg {
   width: 18px;
   height: 18px;
   fill: currentColor;
-  opacity: 0.8;
+  opacity: 0.75;
+  flex-shrink: 0;
+  transition: opacity 0.18s ease;
 }
 
 .settings-tab-btn.active svg {
   opacity: 1;
 }
 
-/* --- 右側：コンテンツエリア --- */
+.settings-tabs-footer {
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-save-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 13px;
+  border: none;
+  border-radius: 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(135deg, #ff2d55, #c81e3f);
+  box-shadow: 0 6px 18px rgba(255, 45, 85, 0.32);
+  transition: transform 0.15s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.settings-save-btn:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 8px 22px rgba(255, 45, 85, 0.42);
+}
+
+.settings-save-btn:active {
+  transform: scale(0.97);
+}
+
+.settings-save-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-version {
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: rgba(255, 255, 255, 0.3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 蜿ｳ蛛ｴ�壹さ繝ｳ繝�Φ繝�お繝ｪ繧｢ --- */
 .settings-panels {
   flex: 1;
   display: flex;
@@ -574,7 +674,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 }
 
 .settings-panels-header {
-  padding: 24px 30px 16px;
+  padding: 24px 30px 14px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -582,8 +682,9 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 .settings-panels-header h3 {
   margin: 0;
-  font-size: 20px;
-  font-weight: 700;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
 }
 
 /* Unified Close Button Base */
@@ -666,12 +767,13 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   height: 14px;
 }
 
-/* スクロールエリア */
+/* 繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ繧ｨ繝ｪ繧｢ */
 .settings-scroll-area {
-  padding: 10px 30px 30px;
+  padding: 12px 30px 30px;
   overflow-y: auto;
   flex: 1;
   scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
 .settings-scroll-area::-webkit-scrollbar {
@@ -683,10 +785,14 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   border-radius: 3px;
 }
 
+.settings-scroll-area::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
 /* パネル表示制御 */
 .settings-panel {
   display: none;
-  animation: fadePanelIn 0.3s ease;
+  animation: fadePanelIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .settings-panel.active {
@@ -696,7 +802,7 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 @keyframes fadePanelIn {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(7px);
   }
 
   to {
@@ -706,40 +812,165 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 }
 
 .settings-section-title {
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 700;
-  color: #fff;
-  margin-bottom: 12px;
-  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 1.1px;
+  margin: 6px 0 10px 4px;
 }
 
 /* カード型デザイン */
 .settings-group-card {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.045);
   border-radius: 16px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  margin-bottom: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  margin-bottom: 26px;
 }
 
 .setting-row {
-  padding: 16px 20px;
+  padding: 15px 18px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  gap: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  transition: background 0.15s ease;
+}
+
+.setting-row:hover {
+  background: rgba(255, 255, 255, 0.025);
 }
 
 .setting-row:last-child {
   border-bottom: none;
 }
 
-/* スライダーカスタマイズ */
+/* 縦積みレイアウトの行（スライダーや言語ピルなど） */
+.setting-row.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.setting-row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.setting-subline {
+  margin-top: 2px;
+}
+
+.setting-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.45;
+}
+
+.setting-name.secondary {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.setting-desc {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.setting-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 7px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 99px;
+  vertical-align: 1px;
+}
+
+.setting-value-badge {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 3px 9px;
+  border-radius: 7px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.setting-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.65);
+  white-space: pre-line;
+  background: rgba(0, 0, 0, 0.22);
+  padding: 10px 12px;
+  border-radius: 9px;
+}
+
+/* 中身が空のときは表示しない */
+.setting-note:empty {
+  display: none;
+}
+
+/* 数値入力 + 単位 */
+.setting-number-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.setting-input-number {
+  width: 76px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-radius: 9px;
+  padding: 7px 9px;
+  text-align: right;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.setting-input-number:focus {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.setting-unit {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* スライダーカスタマイズ（--fill で進捗を塗る） */
 .setting-row input[type="range"] {
   -webkit-appearance: none;
   width: 100%;
   background: transparent;
-  margin: 12px 0 4px 0;
+  margin: 4px 0;
 }
 
 .setting-row input[type="range"]:focus {
@@ -748,188 +979,224 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 
 .setting-row input[type="range"]::-webkit-slider-runnable-track {
   width: 100%;
-  height: 4px;
+  height: 5px;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 2px;
+  background: linear-gradient(to right,
+      var(--acc, #ff2d55) var(--fill, 50%),
+      rgba(255, 255, 255, 0.14) var(--fill, 50%));
+  border-radius: 3px;
+  transition: filter 0.2s;
+}
+
+.setting-row input[type="range"]:hover::-webkit-slider-runnable-track {
+  filter: brightness(1.15);
 }
 
 .setting-row input[type="range"]::-webkit-slider-thumb {
-  height: 20px;
-  width: 20px;
+  height: 17px;
+  width: 17px;
   border-radius: 50%;
   background: #fff;
   cursor: pointer;
   -webkit-appearance: none;
-  margin-top: -8px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  transition: transform 0.1s;
+  margin-top: -6px;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s cubic-bezier(0.25, 1, 0.5, 1), box-shadow 0.15s ease;
+}
+
+.setting-row input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
 }
 
 .setting-row input[type="range"]::-webkit-slider-thumb:active {
-  transform: scale(1.15);
+  transform: scale(1.25);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.45), 0 0 0 7px var(--acc-soft, rgba(255, 45, 85, 0.16));
 }
 
 /* 入力欄 */
 .setting-input-text {
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.09);
   color: #fff;
   border-radius: 10px;
-  padding: 12px 14px;
+  padding: 11px 14px;
   width: 100%;
   font-size: 13px;
-  margin-top: 8px;
-  transition: border 0.2s, background 0.2s;
+  box-sizing: border-box;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.setting-input-text::placeholder {
+  color: rgba(255, 255, 255, 0.3);
 }
 
 .setting-input-text:focus {
   border-color: rgba(255, 255, 255, 0.3);
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.42);
   outline: none;
 }
 
 
-/* ボタン */
+/* アクションボタン（データ管理など） */
 .settings-action-btn {
-  width: 100%;
-  padding: 10px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 9px;
   border: none;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 12.5px;
   cursor: pointer;
-  margin-top: 8px;
-  transition: transform 0.1s;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: transform 0.12s ease, background 0.18s ease, filter 0.18s ease;
+}
+
+.settings-action-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .settings-action-btn:active {
-  transform: scale(0.98);
+  transform: scale(0.96);
 }
 
-.btn-primary {
-  background: #007AFF;
-  color: #fff;
+.settings-action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .btn-danger {
-  background: rgba(255, 59, 48, 0.15);
+  background: rgba(255, 59, 48, 0.14);
   color: #ff453a;
-  border: 1px solid rgba(255, 59, 48, 0.3);
+  border: 1px solid rgba(255, 59, 48, 0.32);
 }
 
-.btn-danger:hover {
-  background: rgba(255, 59, 48, 0.25);
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 59, 48, 0.26);
+}
+
+/* より破壊的な操作（全削除）は塗りつぶしで強調 */
+.btn-danger.strong {
+  background: #ff3b30;
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn-danger.strong:hover:not(:disabled) {
+  background: #ff3b30;
+  filter: brightness(1.1);
+}
+
+.btn-neutral {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.btn-neutral:hover {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 /* トグルスイッチ調整 */
-.toggle-label span {
-  font-size: 14px;
-  font-weight: 500;
+.toggle-label {
+  cursor: pointer;
 }
 
-/* 1. ベースの形 */
-#trans-toggle,
-#shared-trans-toggle,
-#sync-offset-save-toggle,
-#fast-mode-toggle,
-#left-align-toggle,
-#apple-bg-toggle,
-#animated-caption-toggle,
-#lrclib-fallback-toggle {
+.toggle-label .setting-name {
+  transition: color 0.2s;
+}
+
+.toggle-label:hover .setting-name {
+  color: #fff;
+}
+
+.settings-panel input[type="checkbox"] {
   appearance: none;
-  width: 38px;
-  height: 22px;
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 11px;
+  -webkit-appearance: none;
+  width: 44px;
+  height: 26px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 13px;
   position: relative;
   cursor: pointer;
   outline: none;
-  transition: background 0.3s ease;
+  transition: background 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.25s, box-shadow 0.25s;
   flex-shrink: 0;
 }
 
-#trans-toggle:checked,
-#shared-trans-toggle:checked,
-#sync-offset-save-toggle:checked,
-#fast-mode-toggle:checked,
-#left-align-toggle:checked,
-#apple-bg-toggle:checked,
-#animated-caption-toggle:checked,
-#lrclib-fallback-toggle:checked {
-  background: #ff0000;
+.settings-panel input[type="checkbox"]:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 
-#trans-toggle::after,
-#shared-trans-toggle::after,
-#sync-offset-save-toggle::after,
-#fast-mode-toggle::after,
-#left-align-toggle::after,
-#apple-bg-toggle::after,
-#animated-caption-toggle::after,
-#lrclib-fallback-toggle::after {
+.settings-panel input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px var(--acc-soft, rgba(255, 45, 85, 0.16));
+}
+
+.settings-panel input[type="checkbox"]:checked {
+  background: var(--acc, #ff2d55);
+  border-color: transparent;
+}
+
+.settings-panel input[type="checkbox"]:checked:hover {
+  filter: brightness(1.1);
+}
+
+.settings-panel input[type="checkbox"]::after {
   content: '';
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   background: #fff;
   border-radius: 50%;
-  transition: transform 0.3s ease;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-#trans-toggle:checked::after,
-#shared-trans-toggle:checked::after,
-#sync-offset-save-toggle:checked::after,
-#fast-mode-toggle:checked::after,
-#left-align-toggle:checked::after,
-#apple-bg-toggle:checked::after,
-#animated-caption-toggle:checked::after,
-#lrclib-fallback-toggle:checked::after {
-  transform: translateX(16px);
+.settings-panel input[type="checkbox"]:checked::after {
+  transform: translateX(18px);
 }
 
-
-.ytm-lang-section {
-  margin-top: 10px;
-}
-
-.ytm-lang-label {
-  font-size: 12px;
-  margin-bottom: 4px;
-  opacity: 0.8;
-}
 
 .ytm-lang-group {
   display: inline-flex;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 2px;
   background: rgba(255, 255, 255, 0.06);
-  padding: 4px;
-  border-radius: 999px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .ytm-lang-pill {
-  border-radius: 999px;
+  border-radius: 8px;
   border: none;
-  padding: 4px 10px;
+  padding: 6px 14px;
   font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
   background: transparent;
-  color: #fff;
-  opacity: 0.8;
-  transition: background 0.15s ease, opacity 0.15s ease, transform 0.1s ease;
-}
-
-.ytm-lang-pill.active {
-  background: rgba(255, 255, 255, 0.9);
-  color: #111;
-  opacity: 1;
-  transform: translateY(-0.5px);
+  color: rgba(255, 255, 255, 0.62);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .ytm-lang-pill:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
   opacity: 1;
+}
+
+.ytm-lang-pill.active {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  opacity: 1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 
@@ -971,9 +1238,9 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   padding: 22px 20px 20px;
   border-radius: 30px;
   color: #fff;
-  background: rgba(15, 15, 22, 0.62);
-  backdrop-filter: blur(34px) saturate(170%);
-  -webkit-backdrop-filter: blur(34px) saturate(170%);
+  background: rgba(15, 15, 22, 0.92);
+  /* backdrop-filter: blur(34px) saturate(170%); */
+  /* -webkit-backdrop-filter: blur(34px) saturate(170%); */
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
   scrollbar-width: none;
@@ -1148,9 +1415,9 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   align-items: center;
   justify-content: center;
   padding: 18px;
-  background: rgba(5, 8, 15, 0.36);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(5, 8, 15, 0.75);
+  /* backdrop-filter: blur(12px); */
+  /* -webkit-backdrop-filter: blur(12px); */
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease-out;
@@ -1173,9 +1440,9 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   padding: 26px 24px 24px;
   border-radius: 32px;
   color: #fff;
-  background: rgba(18, 18, 24, 0.76);
-  backdrop-filter: blur(36px) saturate(180%);
-  -webkit-backdrop-filter: blur(36px) saturate(180%);
+  background: rgba(18, 18, 24, 0.94);
+  /* backdrop-filter: blur(36px) saturate(180%); */
+  /* -webkit-backdrop-filter: blur(36px) saturate(180%); */
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow: 0 28px 70px rgba(0, 0, 0, 0.45);
   transform: translateY(18px) scale(0.98);
@@ -1199,9 +1466,8 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   color: rgba(255, 255, 255, 0.3);
   margin-bottom: 35px;
   cursor: pointer;
-  transition: transform 0.5s, filter 0.5s, color 0.5s;
+  transition: transform 0.5s, color 0.5s, opacity 0.5s;
   transform-origin: left;
-  filter: blur(1px);
   transform: scale(0.95);
   display: block;
   width: 100%;
@@ -1210,6 +1476,9 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   word-break: keep-all;
   text-wrap: balance;
   white-space: pre-wrap;
+
+  /* GPU蜷域�繝ｬ繧､繝､繝ｼ縺ｫ逋ｻ骭ｲ縺励※繧ｹ繧ｯ繝ｭ繝ｼ繝ｫ縺ｨ螟牙ｽ｢譎ゅ�蜀阪Λ繧ｹ繧ｿ繝ｩ繧､繧ｺ繧帝∩縺代ｋ */
+  will-change: transform, opacity;
 }
 
 #my-lyrics-container.moviemode .lyric-line {
@@ -1229,7 +1498,7 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
 body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
   position: relative;
   --ytm-animated-font-scale: 0.5;
-  /* 横並びレイアウト時の横幅制限（左カラム 400px と gap 8vw と padding 10vw を考慮し、ゆとりを持たせる） */
+  /* 讓ｪ荳ｦ縺ｳ繝ｬ繧､繧｢繧ｦ繝域凾縺ｮ讓ｪ蟷�宛髯撰ｼ亥ｷｦ繧ｫ繝ｩ繝� 400px 縺ｨ gap 8vw 縺ｨ padding 10vw 繧定��縺励√ｆ縺ｨ繧翫ｒ謖√◆縺帙ｋ�� */
   --ytm-animated-width: min(calc(80vw - 420px), calc(65vh * 16 / 9));
   width: var(--ytm-animated-width);
   height: calc(var(--ytm-animated-width) * 9 / 16);
@@ -1237,10 +1506,10 @@ body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
   overflow: hidden;
   mask-image: none;
 
-  /* Flexboxによる強制的な縮小を防止してアスペクト比を固定 */
+  /* Flexbox縺ｫ繧医ｋ蠑ｷ蛻ｶ逧�↑邵ｮ蟆上ｒ髦ｲ豁｢縺励※繧｢繧ｹ繝壹け繝域ｯ斐ｒ蝗ｺ螳� */
   flex-shrink: 0;
 
-  /* コンテナクエリを有効化して、中のフォントサイズをコンテナの幅に連動させる（幅のみの参照のため inline-size を指定） */
+  /* 繧ｳ繝ｳ繝�リ繧ｯ繧ｨ繝ｪ繧呈怏蜉ｹ蛹悶＠縺ｦ縲∽ｸｭ縺ｮ繝輔か繝ｳ繝医し繧､繧ｺ繧偵さ繝ｳ繝�リ縺ｮ蟷�↓騾｣蜍輔＆縺帙ｋ�亥ｹ��縺ｿ縺ｮ蜿ら�縺ｮ縺溘ａ inline-size 繧呈欠螳夲ｼ� */
   container-type: inline-size;
 }
 
@@ -1266,23 +1535,23 @@ body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
   animation: ytm-caption-pop 0.16s ease-out both;
   will-change: opacity, transform;
 
-  /* 基準幅 800px に対するコンテナの現在幅 (100cqw) の比率でフォントサイズを3倍にスケール */
+  /* 蝓ｺ貅門ｹ� 800px 縺ｫ蟇ｾ縺吶ｋ繧ｳ繝ｳ繝�リ縺ｮ迴ｾ蝨ｨ蟷� (100cqw) 縺ｮ豈皮紫縺ｧ繝輔か繝ｳ繝医し繧､繧ｺ繧�3蛟阪↓繧ｹ繧ｱ繝ｼ繝ｫ */
   font-size: 48px;
 }
 
 @keyframes ytm-caption-pop {
   from {
-    filter: blur(2px);
+    opacity: 0;
+    transform: scale(0.98);
   }
 
   to {
-    filter: blur(0);
+    opacity: 1;
   }
 }
 
 .lyric-line.active {
   color: #fff;
-  filter: blur(0);
   transform: scale(1.05);
   text-shadow: 0 0 30px rgba(255, 255, 255, 0.5);
 }
@@ -1300,7 +1569,7 @@ body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
   font-weight: 600;
 }
 
-/* タイムスタンプ有り時の翻訳アニメ */
+/* 繧ｿ繧､繝�繧ｹ繧ｿ繝ｳ繝玲怏繧頑凾縺ｮ鄙ｻ險ｳ繧｢繝九Γ */
 body.ytm-custom-layout.ytm-has-timestamp .lyric-line .lyric-translation {
   opacity: 0;
   max-height: 0;
@@ -1315,7 +1584,7 @@ body.ytm-custom-layout.ytm-has-timestamp .lyric-line.show-translation .lyric-tra
   margin-top: 6px;
 }
 
-/* 1文字ずつ光る */
+/* 1譁�ｭ励★縺､蜈峨ｋ */
 body.ytm-custom-layout .lyric-line .lyric-char {
   display: inline-block;
   transition: color 0.12s linear, transform 0.12s linear, text-shadow 0.12s linear, opacity 0.12s linear;
@@ -1331,10 +1600,9 @@ body.ytm-custom-layout .lyric-line.active .lyric-char.char-active {
   text-shadow: 0 0 12px rgba(255, 255, 255, 0.8);
 }
 
-/* タイムスタンプ無し歌詞 */
+/* 繧ｿ繧､繝�繧ｹ繧ｿ繝ｳ繝礼┌縺玲ｭ瑚ｩ� */
 body.ytm-custom-layout.ytm-no-timestamp .lyric-line {
   color: #fff;
-  filter: blur(0);
   transform: scale(1);
   opacity: 1;
   cursor: default;
@@ -1342,7 +1610,7 @@ body.ytm-custom-layout.ytm-no-timestamp .lyric-line {
   text-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
 }
 
-/* Loading / 歌詞なし */
+/* Loading / 豁瑚ｩ槭↑縺� */
 .lyric-loading {
   display: flex;
   flex-direction: column;
@@ -1357,45 +1625,43 @@ body.ytm-custom-layout.ytm-no-timestamp .lyric-line {
   text-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
 }
 
-/* ポップアップの z-index */
+/* 繝昴ャ繝励い繝��縺ｮ z-index */
 body.ytm-custom-layout ytmusic-popup-container,
 body.ytm-custom-layout ytmusic-popup-container tp-yt-iron-dropdown {
   z-index: 3000 !important;
 }
 
-/* プレイヤーバー全体 */
+/* 繝励Ξ繧､繝､繝ｼ繝舌�蜈ｨ菴� */
 body.ytm-custom-layout ytmusic-player-bar {
   position: fixed !important;
   bottom: 40px !important;
   left: 50% !important;
   transform: translateX(-50%) !important;
   width: 95% !important;
-  max-width: 975px !important;
-  height: 90px !important;
+  max-width: 1000px !important;
+  height: 80px !important;
   border-radius: 40px !important;
-  background: rgba(20, 20, 20, 0.6) !important;
-  backdrop-filter: blur(60px) saturate(180%) !important;
+  background: rgba(20, 20, 20, 0.9) !important;
+  /* backdrop-filter: blur(60px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.15) !important;
   display: flex !important;
   flex-wrap: nowrap !important;
   justify-content: space-between !important;
   align-items: center !important;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
-  padding: 0 20px !important;
+  padding: 0 32px !important;
   z-index: 2000 !important;
   visibility: visible !important;
   opacity: 1 !important;
-  overflow: visible !important;
+  overflow: hidden !important;
   transition: opacity 0.5s ease, visibility 0.5s ease !important;
-  opacity: 1 !important;
-  visibility: visible !important;
 }
 
 body.ytm-custom-layout ytmusic-player-bar.moviemode {
   --ytmusic-player-bar-fullscreen-progress-bar-inset: 20px;
   visibility: visible !important;
-  background: rgba(0, 0, 0, 20%) !important;
-  backdrop-filter: blur(8px) saturate(100%) !important;
+  background: rgba(0, 0, 0, 0.8) !important;
+  /* backdrop-filter: blur(8px) saturate(100%) !important; */
   width: 98% !important;
   max-width: 1200px !important;
 }
@@ -1406,22 +1672,22 @@ body.ytm-custom-layout ytmusic-player-bar.inactive.moviemode {
   pointer-events: none !important;
 }
 
-/* 左側コントロール */
+/* 蟾ｦ蛛ｴ繧ｳ繝ｳ繝医Ο繝ｼ繝ｫ */
 body.ytm-custom-layout .left-controls {
   flex: 0 0 auto !important;
   justify-content: flex-start !important;
 }
 
-/* 中央側の再生ボタンを隠す */
+/* 荳ｭ螟ｮ蛛ｴ縺ｮ蜀咲函繝懊ち繝ｳ繧帝國縺� */
 body.ytm-custom-layout ytmusic-player-bar .middle-controls ytmusic-play-button-renderer {
   display: none !important;
 }
 
-/* 中央エリア：シークバー中心 */
+/* 荳ｭ螟ｮ繧ｨ繝ｪ繧｢�壹す繝ｼ繧ｯ繝舌�荳ｭ蠢� */
 body.ytm-custom-layout .middle-controls {
   flex: 1 1 auto !important;
   justify-content: center !important;
-  margin: 0 15px !important;
+  margin: 0 5px !important;
   max-width: 600px !important;
   padding: 0 5px !important;
   display: flex !important;
@@ -1431,7 +1697,7 @@ body.ytm-custom-layout .middle-controls {
   position: relative !important;
 }
 
-/* ホバーしたときの時間表示 */
+/* 繝帙ヰ繝ｼ縺励◆縺ｨ縺阪�譎る俣陦ｨ遉ｺ */
 body.ytm-custom-layout #hover-time-info-new {
   font-family: Roboto, Noto Naskh Arabic UI, Arial, sans-serif !important;
   font-size: var(--ytmusic-caption-1-font-size) !important;
@@ -1443,26 +1709,26 @@ body.ytm-custom-layout #hover-time-info-new {
   top: 87% !important;
   transform: translate3d(-50%, -100%, 0) !important;
   padding: 4px 8px !important;
-  background-color: rgba(100, 100, 100, 0.2) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  background-color: rgba(40, 40, 40, 0.9) !important;
+  /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border-radius: 10px !important;
   z-index: 10000 !important;
 }
 
-/* プレイヤーバー内の曲情報は使わない */
+/* 繝励Ξ繧､繝､繝ｼ繝舌�蜀��譖ｲ諠��ｱ縺ｯ菴ｿ繧上↑縺� */
 body.ytm-custom-layout .content-info-wrapper .style-scope {
   display: none !important;
 }
 
-/* 右側コントロール */
+/* 蜿ｳ蛛ｴ繧ｳ繝ｳ繝医Ο繝ｼ繝ｫ */
 body.ytm-custom-layout ytmusic-player-bar .right-controls {
   display: flex !important;
   align-items: center !important;
   gap: 10px !important;
-  margin-right: 12px !important;
+  margin-right: 16px !important;
 }
 
-/* ボタン・テキストの色 */
+/* 繝懊ち繝ｳ繝ｻ繝�く繧ｹ繝医�濶ｲ */
 body.ytm-custom-layout ytmusic-player-bar tp-yt-iron-icon,
 body.ytm-custom-layout ytmusic-player-bar .time-info,
 body.ytm-custom-layout ytmusic-player-bar button:not(#my-mode-toggle) {
@@ -1471,7 +1737,7 @@ body.ytm-custom-layout ytmusic-player-bar button:not(#my-mode-toggle) {
   opacity: 1 !important;
 }
 
-/* IMMERSION トグルボタン */
+/* IMMERSION 繝医げ繝ｫ繝懊ち繝ｳ */
 #my-mode-toggle {
   padding: 4px 10px;
   font-size: 11px;
@@ -1487,50 +1753,52 @@ body.ytm-custom-layout ytmusic-player-bar .right-controls #my-mode-toggle {
   order: 20;
 }
 
-/* 音量・リピート・シャッフルなど */
-body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="音量"],
-body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="ミュート"],
+/* 髻ｳ驥上�繝ｪ繝斐�繝医�繧ｷ繝｣繝�ヵ繝ｫ縺ｪ縺ｩ */
+body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="髻ｳ驥�"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="繝溘Η繝ｼ繝�"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="volume"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="Volume"] {
   order: 21;
   margin-left: 2px;
 }
 
-body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="リピート"],
-body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="繰り返し"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="繝ｪ繝斐�繝�"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="郢ｰ繧願ｿ斐＠"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="repeat"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="Repeat"] {
   order: 22;
 }
 
-body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="シャッフル"],
-body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="シャッフル再生"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="繧ｷ繝｣繝�ヵ繝ｫ"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="繧ｷ繝｣繝�ヵ繝ｫ蜀咲函"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="shuffle"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls ytmusic-toggle-button-renderer[aria-label*="Shuffle"] {
   order: 23;
 }
 
-body.ytm-custom-layout ytmusic-player-bar .right-controls tp-yt-paper-icon-button[aria-label*="メニュー"],
-body.ytm-custom-layout ytmusic-player-bar .right-controls tp-yt-paper-icon-button[aria-label*="その他"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls tp-yt-paper-icon-button[aria-label*="繝｡繝九Η繝ｼ"],
+body.ytm-custom-layout ytmusic-player-bar .right-controls tp-yt-paper-icon-button[aria-label*="縺昴�莉�"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls tp-yt-paper-icon-button[aria-label*="More"],
 body.ytm-custom-layout ytmusic-player-bar .right-controls tp-yt-paper-icon-button[aria-label*="menu"] {
   order: 24;
 }
 
-/* 再生位置スライダー */
+/* 蜀咲函菴咲ｽｮ繧ｹ繝ｩ繧､繝繝ｼ */
 body.ytm-custom-layout ytmusic-player-bar .middle-controls tp-yt-paper-slider#progress-bar {
   order: 3;
   flex: 1 1 auto !important;
   min-width: 0 !important;
   width: 100% !important;
   margin: 0 16px !important;
-  padding: 4px 0 !important;
+  padding: 0 !important;
   box-sizing: border-box !important;
-  height: 40px !important;
+  height: 32px !important;
   display: flex !important;
   align-items: center !important;
   position: relative !important;
   pointer-events: auto !important;
+  transform: none !important;
+  overflow: visible !important;
 }
 
 body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role="slider"] {
@@ -1540,19 +1808,15 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   box-sizing: border-box !important;
 }
 
-/* 再生コントロール内のサムネイル */
+/* 蜀咲函繧ｳ繝ｳ繝医Ο繝ｼ繝ｫ蜀��繧ｵ繝�繝阪う繝ｫ */
 body.ytm-custom-layout ytmusic-player-bar .thumbnail-image-wrapper {
-  display: block !important;
-  width: 36px !important;
-  height: 36px !important;
-  border-radius: 10px !important;
-  overflow: hidden !important;
+  display: none !important;
 }
 
-/* 非 Immersion モード */
+/* 髱� Immersion 繝｢繝ｼ繝� */
 body:not(.ytm-custom-layout) ytmusic-player-bar {
-  background: rgba(20, 20, 20, 0.4) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  background: rgba(20, 20, 20, 0.8) !important;
+  /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.1) !important;
   border-radius: 16px !important;
   bottom: 12px !important;
@@ -1635,28 +1899,28 @@ body:not(.ytm-custom-layout) #hover-time-info-new {
   top: 90% !important;
   transform: translate3d(-50%, -100%, 0) !important;
   padding: 4px 8px !important;
-  background-color: rgba(100, 100, 100, 0.40) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  background-color: rgba(40, 40, 40, 0.9) !important;
+  /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border-radius: 10px !important;
   z-index: 10000 !important;
 }
 
-/* マルチページメニュー */
+/* 繝槭Ν繝√�繝ｼ繧ｸ繝｡繝九Η繝ｼ */
 ytmusic-multi-page-menu-renderer {
   border-radius: 20px !important;
-  background: rgba(20, 20, 20, 0.7) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  background: rgba(30, 30, 30, 0.95) !important;
+  /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
 }
 
-/* 次に再生などのトースト */
+/* 谺｡縺ｫ蜀咲函縺ｪ縺ｩ縺ｮ繝医�繧ｹ繝� */
 tp-yt-paper-toast.style-scope {
-  background: rgba(30, 30, 30, 0.5) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  background: rgba(30, 30, 30, 0.9) !important;
+  /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
   border-radius: 10px !important;
   transform: translateY(0px) !important;
-  /* 下から上に行くアニメーションをオーバーライド */
+  /* 荳九°繧我ｸ翫↓陦後￥繧｢繝九Γ繝ｼ繧ｷ繝ｧ繝ｳ繧偵が繝ｼ繝舌�繝ｩ繧､繝� */
   margin-top: -20px !important;
   left: 1vh !important;
 }
@@ -1666,15 +1930,15 @@ body.ytm-custom-layout tp-yt-paper-toast.style-scope {
   left: 7.5vh !important;
 }
 
-/* 3点メニューポップアップ */
+/* 3轤ｹ繝｡繝九Η繝ｼ繝昴ャ繝励い繝�� */
 tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   border-radius: 10px !important;
-  --paper-listbox-background-color: rgba(20, 20, 20, 70%) !important;
-  backdrop-filter: blur(20px) saturate(180%) !important;
+  --paper-listbox-background-color: rgba(30, 30, 30, 0.95) !important;
+  /* backdrop-filter: blur(20px) saturate(180%) !important; */
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
 }
 
-/* Lyricsアップロードメニュー */
+/* Lyrics繧｢繝��繝ｭ繝ｼ繝峨Γ繝九Η繝ｼ */
 .ytm-upload-menu {
   position: absolute;
   bottom: 52px;
@@ -1682,10 +1946,10 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   min-width: 240px;
   padding: 8px;
   border-radius: 18px;
-  background: rgba(15, 15, 20, 0.75);
+  background: rgba(20, 20, 25, 0.95);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  /* backdrop-filter: blur(22px) saturate(160%); */
+  /* -webkit-backdrop-filter: blur(22px) saturate(160%); */
   border: 1px solid rgba(255, 255, 255, 0.16);
   display: flex;
   flex-direction: column;
@@ -1784,7 +2048,7 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   font-size: 12px;
 }
 
-/* 歌詞削除ダイアログ */
+/* 豁瑚ｩ槫炎髯､繝繧､繧｢繝ｭ繧ｰ */
 .ytm-confirm-dialog {
   position: absolute;
   bottom: 52px;
@@ -1792,10 +2056,10 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   min-width: 260px;
   padding: 10px 10px 8px;
   border-radius: 18px;
-  background: rgba(15, 15, 20, 0.92);
+  background: rgba(20, 20, 25, 0.98);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(22px) saturate(160%);
-  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  /* backdrop-filter: blur(22px) saturate(160%); */
+  /* -webkit-backdrop-filter: blur(22px) saturate(160%); */
   border: 1px solid rgba(255, 255, 255, 0.16);
   z-index: 9999;
   transform-origin: bottom right;
@@ -1857,7 +2121,7 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   background: rgba(255, 61, 80, 1);
 }
 
-/* 縦画面レイアウト */
+/* 邵ｦ逕ｻ髱｢繝ｬ繧､繧｢繧ｦ繝� */
 @media (orientation: portrait) {
   body.ytm-custom-layout #ytm-custom-wrapper {
     flex-direction: column;
@@ -1923,7 +2187,7 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
   }
 
   body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
-    /* 縦並びなので画面幅に基づきアスペクト比を16:9に固定 */
+    /* 邵ｦ荳ｦ縺ｳ縺ｪ縺ｮ縺ｧ逕ｻ髱｢蟷�↓蝓ｺ縺･縺阪い繧ｹ繝壹け繝域ｯ斐ｒ16:9縺ｫ蝗ｺ螳� */
     --ytm-animated-width: min(90vw, calc(50vh * 16 / 9));
     width: var(--ytm-animated-width);
     height: calc(var(--ytm-animated-width) * 9 / 16);
@@ -2012,8 +2276,7 @@ body.ytm-custom-layout ytmusic-player-bar {
   max-width: 1000px !important;
   height: 80px !important;
   border-radius: 40px !important;
-  background: rgba(20, 20, 20, 0.6) !important;
-  backdrop-filter: blur(60px) saturate(180%) !important;
+  background: rgba(20, 20, 20, 0.9) !important;
   border: 1px solid rgba(255, 255, 255, 0.15) !important;
   display: flex !important;
   flex-wrap: nowrap !important;
@@ -2125,14 +2388,14 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   max-width: 1200px;
   max-height: 900px;
   padding: 40px;
-  background: rgba(10, 10, 12, 0.85);
+  background: rgba(10, 10, 12, 0.96);
   border-radius: 32px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   z-index: 100000;
   display: none;
   flex-direction: column;
   color: #fff;
-  backdrop-filter: blur(50px) saturate(180%);
+  /* backdrop-filter: blur(50px) saturate(180%); */
   box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8);
   overflow: hidden;
 }
@@ -2293,8 +2556,8 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 
 .bento-badge {
   display: inline-block;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
+  background: rgba(255, 255, 255, 0.25);
+  /* backdrop-filter: blur(10px); */
   padding: 6px 14px;
   border-radius: 99px;
   font-size: 12px;
@@ -2494,7 +2757,7 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   font-weight: 600;
 }
 
-/* 縦画面対応 */
+/* 邵ｦ逕ｻ髱｢蟇ｾ蠢� */
 @media (orientation: portrait) {
   #ytm-replay-panel {
     width: 95vw;
@@ -2536,8 +2799,8 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   right: -420px;
   width: 380px;
   height: calc(100vh - 140px);
-  background: rgba(20, 20, 25, 0.85);
-  backdrop-filter: blur(40px) saturate(180%);
+  background: rgba(20, 20, 25, 0.96);
+  /* backdrop-filter: blur(40px) saturate(180%); */
   border-radius: 24px 0 0 24px;
   border-left: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: -20px 0 60px rgba(0, 0, 0, 0.5);
@@ -2586,7 +2849,7 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   flex-direction: column;
   gap: 8px;
   scrollbar-width: none;
-  /* Firefox用 */
+  /* Firefox逕ｨ */
   padding-bottom: 20px;
 }
 
@@ -2725,9 +2988,9 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 .replay-footer-btn {
 
   position: static !important;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.8);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -2735,7 +2998,7 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   letter-spacing: 0.5px;
   padding: 8px 16px;
   border-radius: 99px;
-  backdrop-filter: blur(4px);
+  /* backdrop-filter: blur(4px); */
 }
 
 .replay-footer-btn:hover {
@@ -2797,16 +3060,16 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
 }
 
 
-/* クラウドシンクのやつ */
+/* 繧ｯ繝ｩ繧ｦ繝峨す繝ｳ繧ｯ縺ｮ繧�▽ */
 
 .dr-cloud-sync-btn.cloud-ok .dr-cloud-emoji {
   color: #22c55e;
-  /* 緑 */
+  /* 邱� */
 }
 
 .dr-cloud-sync-btn.cloud-ng .dr-cloud-emoji {
   color: #ef4444;
-  /* 赤 */
+  /* 襍､ */
 }
 
 .dr-cloud-sync-btn .dr-cloud-time {
@@ -2883,7 +3146,7 @@ ytmusic-player-bar .middle-controls tp-yt-paper-slider::before {
   bottom: -12px;
 }
 
-/* プログレスバー追加設定（角丸の内側に収める） */
+/* 繝励Ο繧ｰ繝ｬ繧ｹ繝舌�霑ｽ蜉�險ｭ螳夲ｼ郁ｧ剃ｸｸ縺ｮ蜀��縺ｫ蜿弱ａ繧具ｼ� */
 body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar {
   overflow: visible !important;
   height: 32px !important;
@@ -2938,7 +3201,7 @@ body.ytm-custom-layout::before {
   text-align: right;
 }
 
-/* 左上のハンバーガーメニューを非表示にする */
+/* 蟾ｦ荳翫�繝上Φ繝舌�繧ｬ繝ｼ繝｡繝九Η繝ｼ繧帝撼陦ｨ遉ｺ縺ｫ縺吶ｋ */
 body.ytm-custom-layout ytmusic-nav-bar .left-content>tp-yt-paper-icon-button,
 body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
   display: none !important;
@@ -2974,11 +3237,11 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
   min-width: 280px;
   padding: 14px 16px;
   border-radius: 18px;
-  background: rgba(18, 18, 24, 0.92);
+  background: rgba(18, 18, 24, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(18px) saturate(150%);
-  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  /* backdrop-filter: blur(18px) saturate(150%); */
+  /* -webkit-backdrop-filter: blur(18px) saturate(150%); */
   color: #fff;
   z-index: 2147483647;
   pointer-events: none;
@@ -3036,11 +3299,11 @@ body.ytm-custom-layout ytmusic-nav-bar .left-content #guide-button {
   right: 24px;
   width: 360px;
   max-height: 480px;
-  background: rgba(12, 12, 18, 0.94);
+  background: rgba(12, 12, 18, 0.96);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 18px;
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  /* backdrop-filter: blur(24px) saturate(160%); */
+  /* -webkit-backdrop-filter: blur(24px) saturate(160%); */
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
   z-index: 9999;
   display: flex;
@@ -3158,7 +3421,7 @@ body.ytm-align-left #ytm-custom-left-col {
 body.ytm-align-left #ytm-custom-info-area {
   align-items: flex-start;
   padding: 0;
-  /* 左端に寄せるためにパディングを調整 */
+  /* 蟾ｦ遶ｯ縺ｫ蟇�○繧九◆繧√↓繝代ョ繧｣繝ｳ繧ｰ繧定ｪｿ謨ｴ */
 }
 
 body.ytm-align-left #ytm-custom-title {
@@ -3173,3 +3436,191 @@ body.ytm-align-left #ytm-custom-artist {
 body.ytm-align-left #ytm-btn-area {
   justify-content: flex-start;
 }
+
+/* 再生停止時に背景アニメーションを一時停止してGPU負荷を下げる */
+body.ytm-music-paused #ytm-custom-bg,
+body.ytm-music-paused #ytm-custom-bg::before,
+body.ytm-music-paused #ytm-custom-bg::after {
+  animation-play-state: paused !important;
+}
+
+/* ===================== Normal Mode Animations & Blur ===================== */
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-custom-bg {
+  animation: ytmBgDrift 40s linear infinite alternate;
+}
+
+body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg {
+  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.4)) !important;
+  transform: scale(1.4) !important;
+}
+
+body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg::before {
+  animation: amFluid1 25s infinite alternate ease-in-out;
+}
+
+body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg::after {
+  animation: amFluid2 30s infinite alternate-reverse ease-in-out;
+}
+
+/* ===================== Glassmorphism (Normal Mode Only) ===================== */
+body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-nav-bar {
+  backdrop-filter: blur(24px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
+  background: rgba(15, 15, 15, 0.55) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) .av-toggle.ytmusic-av-toggle {
+  backdrop-filter: blur(20px) saturate(100%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(100%) !important;
+  background: rgba(20, 20, 20, 0.5) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) .ytm-glass-btn {
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  background: rgba(255, 255, 255, 0.12) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-settings-panel {
+  backdrop-filter: blur(40px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(40px) saturate(180%) !important;
+  background: rgba(20, 20, 24, 0.65) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-panel {
+  backdrop-filter: blur(34px) saturate(170%) !important;
+  -webkit-backdrop-filter: blur(34px) saturate(170%) !important;
+  background: rgba(15, 15, 22, 0.55) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-backdrop {
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-dialog {
+  backdrop-filter: blur(36px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(36px) saturate(180%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-player-bar {
+  backdrop-filter: blur(60px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(60px) saturate(180%) !important;
+  background: rgba(20, 20, 20, 0.55) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-player-bar.moviemode {
+  backdrop-filter: blur(8px) saturate(100%) !important;
+  -webkit-backdrop-filter: blur(8px) saturate(100%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #hover-time-info-new {
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-multi-page-menu-renderer {
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) tp-yt-paper-toast.style-scope {
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) .ytm-upload-menu {
+  backdrop-filter: blur(22px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) .ytm-confirm-dialog {
+  backdrop-filter: blur(22px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(160%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-replay-panel {
+  backdrop-filter: blur(50px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(50px) saturate(180%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-candidate-hover-preview {
+  backdrop-filter: blur(18px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(150%) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-switch-panel {
+  backdrop-filter: blur(24px) saturate(160%) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(160%) !important;
+  background: rgba(12, 12, 18, 0.6) !important;
+}
+
+body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-queue-panel {
+  backdrop-filter: blur(40px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(40px) saturate(180%) !important;
+  background: rgba(20, 20, 25, 0.65) !important;
+}
+
+/* ===================== Fallback / Optimization (Lightweight Mode Only) ===================== */
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-custom-bg {
+  animation: none !important;
+  filter: brightness(var(--ytm-bg-brightness, 0.35)) saturate(100%) !important;
+  transform: scale(1.1) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-custom-bg::before,
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-custom-bg::after {
+  animation: none !important;
+  display: none !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode ytmusic-player-bar,
+body.ytm-custom-layout.ytm-lightweight-mode ytmusic-nav-bar,
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-settings-panel,
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-meaning-panel,
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-switch-panel,
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-queue-panel,
+body.ytm-custom-layout.ytm-lightweight-mode .av-toggle.ytmusic-av-toggle,
+body.ytm-custom-layout.ytm-lightweight-mode .ytm-glass-btn {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode ytmusic-player-bar {
+  background: rgba(20, 20, 20, 0.95) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode ytmusic-nav-bar {
+  background: rgba(15, 15, 15, 0.95) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-settings-panel {
+  background: rgba(20, 20, 24, 0.98) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-meaning-panel {
+  background: rgba(15, 15, 22, 0.95) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-switch-panel {
+  background: rgba(12, 12, 18, 0.96) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode #ytm-queue-panel {
+  background: rgba(20, 20, 25, 0.96) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode .av-toggle.ytmusic-av-toggle {
+  background: rgba(20, 20, 20, 0.88) !important;
+}
+
+body.ytm-custom-layout.ytm-lightweight-mode .ytm-glass-btn {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+
