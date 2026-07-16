@@ -34,7 +34,7 @@ git clone https://github.com/naikaku1/YTM_Immersion
 2. アドレスバーに **`chrome://extensions`** (Chrome/Edge)
 3. 画面右上の **「デベロッパーモード」** (Developer Mode) をONにします。
 4. 左上の **「パッケージ化されていない拡張機能を読み込む」** ボタンをクリックします。
-5. 手順1でクローンしたフォルダを選択して読み込みます。
+5. 手順1で解凍した **フォルダ全体** を選択して読み込みます。
 
 ### 3. 使い方
 
