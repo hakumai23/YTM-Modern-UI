@@ -16,7 +16,7 @@
 
 ## インストール方法 (Installation Guide)
 
-この拡張機能は、[Chromeウェブストア版](https://chromewebstore.google.com/detail/ytm-immersion/nnpgbfkmlfneiclbeaniejaheojikhnb?hl=ja)または手動でインストールできます。
+この拡張機能は、[Chromeウェブストア版](https://chromewebstore.google.com/detail/ytm-immersion/nnpgbfkmlfneiclbeaniejaheojikhnb?hl=ja)または手動でインストールできます。以下は手動インストール手順です。
 
 ### 1. ファイルのダウンロードと準備
 
