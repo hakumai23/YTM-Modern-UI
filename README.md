@@ -26,7 +26,7 @@ git clone https://github.com/naikaku1/YTM_Immersion
 ```
 方法2: フォルダをダウンロード（更新に手間がかかります）
 1. 緑色の**Code**メニューから**Download Zip**を選択します。
-2. ダウンロードされたフォルダを解答します
+2. ダウンロードされたフォルダを解凍します
 
 ### 2. Chromeでの読み込み手順
 
