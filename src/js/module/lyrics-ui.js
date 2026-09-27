@@ -2742,6 +2742,8 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_shared_trans_enabled',
   'ytm_left_align',
   'ytm_keep_past_lyrics',
+  'ytm_lyric_stagger',
+  'ytm_fade_past_lyrics',
   'ytm_prefer_song_mode',
   'ytm_apple_bg',
   'ytm_low_cpu_mode',
@@ -3151,15 +3153,97 @@ function setupAutoHideEvents() {
   handleInteraction();
 }
 
+// 完了時刻を一度だけ並べ、毎フレームは境界を越えた行だけ更新する。
+// 行のハイライトとは別に扱うため、デュエットの重なりや最後の行も消せる。
+const buildLyricCompletionSchedule = (data, duration) => {
+  const schedule = [];
+  let nextTime = Number.isFinite(duration) && duration > 0 ? duration : Infinity;
+  for (let i = data.length - 1; i >= 0;) {
+    const time = data[i]?.time;
+    if (!Number.isFinite(time)) { i -= 1; continue; }
+    let first = i;
+    while (first > 0 && Number.isFinite(data[first - 1]?.time) &&
+      Math.abs(data[first - 1].time - time) <= 0.05) first -= 1;
+    for (let j = first; j <= i; j++) {
+      const line = data[j];
+      const dynamicEnd = line._dynamicRenderEndSec;
+      const start = Number.isFinite(line._dynamicRenderStartSec) ? line._dynamicRenderStartSec : line.time;
+      const end = Number.isFinite(dynamicEnd) && dynamicEnd >= start ? dynamicEnd : nextTime;
+      if (Number.isFinite(end) && end >= line.time) schedule.push({ index: j, end });
+    }
+    nextTime = data[first].time;
+    i = first - 1;
+  }
+  return schedule.sort((a, b) => a.end - b.end || a.index - b.index);
+};
+
+const syncCompletedLyricRows = (container, schedule, time) => {
+  if (!container || !Number.isFinite(time)) return;
+  const rows = container.children;
+  const setCompleted = (index, completed) => {
+    const row = rows[index];
+    if (!row || !row.classList.contains('lyric-line')) return;
+    if (row._ytmIsCompleted === completed) return;
+    row._ytmIsCompleted = completed;
+    row.classList.toggle('lyric-completed', completed);
+  };
+  if (container._ytmCompletionSchedule !== schedule || container._ytmCompletionFirstRow !== rows[0]) {
+    container._ytmCompletionSchedule = schedule;
+    container._ytmCompletionFirstRow = rows[0];
+    let cursor = 0;
+    const completed = new Set();
+    while (cursor < schedule.length && schedule[cursor].end <= time) completed.add(schedule[cursor++].index);
+    for (let i = 0; i < rows.length; i++) {
+      rows[i]._ytmIsCompleted = undefined;
+      setCompleted(i, completed.has(i));
+    }
+    container._ytmCompletionCursor = cursor;
+    return;
+  }
+  let cursor = container._ytmCompletionCursor;
+  while (cursor > 0 && schedule[cursor - 1].end > time) setCompleted(schedule[--cursor].index, false);
+  while (cursor < schedule.length && schedule[cursor].end <= time) setCompleted(schedule[cursor++].index, true);
+  container._ytmCompletionCursor = cursor;
+};
+
+let _lyricCompletionData = null;
+let _lyricCompletionDuration = null;
+let _lyricCompletionSchedule = [];
+const refreshCompletedLyrics = (time, duration) => {
+  if (!config.fadePastLyrics || !hasTimestamp || animatedCaptionData || !Number.isFinite(time)) return;
+  const end = Number.isFinite(duration) ? duration : null;
+  if (_lyricCompletionData !== lyricsData || _lyricCompletionDuration !== end) {
+    _lyricCompletionData = lyricsData;
+    _lyricCompletionDuration = end;
+    _lyricCompletionSchedule = buildLyricCompletionSchedule(lyricsData, end);
+  }
+  syncCompletedLyricRows(ui.lyrics, _lyricCompletionSchedule, time);
+  if (PipManager.pipWindow) syncCompletedLyricRows(PipManager.pipLyricsContainer, _lyricCompletionSchedule, time);
+};
+
+const applyLyricEffectsSettings = () => {
+  document.body.classList.toggle('ytm-fade-past-lyrics', !!config.fadePastLyrics);
+  PipManager.pipWindow?.document?.body.classList.toggle('ytm-fade-past-lyrics', !!config.fadePastLyrics);
+  if (!config.lyricStagger || config.lowCpuMode) {
+    for (const container of [ui.lyrics, PipManager.pipLyricsContainer]) {
+      const hadMotion = !!container?._ytmRowMotion;
+      resetLyricRowMotion(container);
+      if (hadMotion) finishLyricBrowseReturn(container);
+    }
+  }
+  refreshCompletedLyrics(getCurrentPlaybackTimeSec(), document.querySelector('video')?.duration);
+};
+
 function setupScrollResumeEvents() {
   if (!ui.lyrics) return;
 
-  const handleUserScroll = () => {
+  const handleUserScroll = (event) => {
     // 曲切替・再描画など拡張側の操作で発生したscrollイベントは
     // ユーザースクロールとして扱わない（自動スクロールが止まる原因になる）
-    if (performance.now() < _suppressUserScrollUntil) return;
+    const directInput = event?.type !== 'scroll';
+    if (!directInput && performance.now() < _suppressUserScrollUntil) return;
 
-    if (isProgrammaticScrolling) {
+    if (!directInput && isProgrammaticScrolling) {
       // プログラムスクロール中は、完了までタイムアウトを延長
       clearTimeout(programmaticScrollTimeout);
       programmaticScrollTimeout = setTimeout(() => {
@@ -3169,18 +3253,28 @@ function setupScrollResumeEvents() {
     }
 
     isUserScrolling = true;
+    isProgrammaticScrolling = false;
+    ui.lyrics._ytmResumeFadeAfterScroll = false;
+    ui.lyrics._scrollTarget = undefined;
+    ui.lyrics._scrollVel = 0;
+    resetLyricRowMotion(ui.lyrics);
     ui.lyrics.classList.add('ytm-user-browsing-lyrics');
     clearTimeout(userScrollTimeout);
     userScrollTimeout = setTimeout(() => {
       isUserScrolling = false;
       if (ui.lyrics) {
-        ui.lyrics.classList.remove('ytm-user-browsing-lyrics');
+        ui.lyrics._ytmResumeFadeAfterScroll = true;
         ui.lyrics._lastScrolledIndex = -1; // 復帰時に強制スクロールさせるためリセット
       }
     }, 3000);
   };
 
   ui.lyrics.addEventListener('scroll', handleUserScroll, { passive: true });
+  ui.lyrics.addEventListener('wheel', handleUserScroll, { passive: true });
+  ui.lyrics.addEventListener('touchmove', handleUserScroll, { passive: true });
+  ui.lyrics.addEventListener('keydown', (event) => {
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) handleUserScroll(event);
+  });
 }
 
 
@@ -5677,6 +5771,18 @@ function applyUiScale(value) {
   return scale;
 }
 
+async function restoreLyricEffectsPreferences() {
+  const [savedStagger, savedFade, legacyKeepPast] = await Promise.all([
+    storage.get('ytm_lyric_stagger'),
+    storage.get('ytm_fade_past_lyrics'),
+    storage.get('ytm_keep_past_lyrics'),
+  ]);
+  if (typeof savedStagger === 'boolean') config.lyricStagger = savedStagger;
+  if (typeof savedFade === 'boolean') config.fadePastLyrics = savedFade;
+  else if (typeof legacyKeepPast === 'boolean') config.fadePastLyrics = !legacyKeepPast;
+  config.keepPastLyrics = !config.fadePastLyrics;
+}
+
 async function initSettings() {
   if (ui.settings) return;
   ui.settings = createEl('div', 'ytm-settings-panel', '', ``);
@@ -5715,6 +5821,8 @@ async function initSettings() {
 
   const lowCpuStored = await storage.get('ytm_low_cpu_mode');
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
+  await restoreLyricEffectsPreferences();
+  applyLyricEffectsSettings();
 
   // ★スライダー初期値反映
   const weightStored = await storage.get('ytm_lyric_weight');
@@ -6011,6 +6119,12 @@ function writeSettingsDraft(draft) {
   });
 }
 
+function updateLyricMotionSettingsState() {
+  const lowCpuToggle = document.getElementById('low-cpu-toggle');
+  const staggerToggle = document.getElementById('lyric-stagger-toggle');
+  if (staggerToggle) staggerToggle.disabled = !!lowCpuToggle?.checked;
+}
+
 function renderSettingsPanel() {
   if (!ui.settings) return;
 
@@ -6094,10 +6208,6 @@ function renderSettingsPanel() {
                 <input type="checkbox" id="left-align-toggle">
               </label>
               <label class="setting-row toggle-label">
-                <span class="setting-name">${t('settings_keep_past_lyrics')}</span>
-                <input type="checkbox" id="keep-past-lyrics-toggle">
-              </label>
-              <label class="setting-row toggle-label">
                 <span class="setting-name">${t('settings_prefer_song_mode')}</span>
                 <input type="checkbox" id="prefer-song-mode-toggle">
               </label>
@@ -6141,6 +6251,20 @@ function renderSettingsPanel() {
               <label class="setting-row toggle-label">
                 <span class="setting-name">${t('settings_apple_sync')}</span>
                 <input type="checkbox" id="apple-sync-toggle">
+              </label>
+              <label class="setting-row toggle-label">
+                <span>
+                  <span class="setting-name">${t('settings_lyric_stagger')}</span>
+                  <span class="setting-desc" id="lyric-stagger-desc">${t('settings_lyric_stagger_desc')}</span>
+                </span>
+                <input type="checkbox" id="lyric-stagger-toggle" aria-describedby="lyric-stagger-desc">
+              </label>
+              <label class="setting-row toggle-label">
+                <span>
+                  <span class="setting-name">${t('settings_fade_past_lyrics')}</span>
+                  <span class="setting-desc" id="fade-past-lyrics-desc">${t('settings_fade_past_lyrics_desc')}</span>
+                </span>
+                <input type="checkbox" id="fade-past-lyrics-toggle" aria-describedby="fade-past-lyrics-desc">
               </label>
               <label class="setting-row toggle-label">
                 <span class="setting-name">${t('settings_animated_captions')}</span>
@@ -6301,7 +6425,8 @@ function renderSettingsPanel() {
   document.getElementById('trans-toggle').checked = config.useTrans;
   document.getElementById('shared-trans-toggle').checked = !!config.useSharedTranslateApi;
   document.getElementById('left-align-toggle').checked = !!config.leftAlignInfo;
-  document.getElementById('keep-past-lyrics-toggle').checked = !!config.keepPastLyrics;
+  document.getElementById('lyric-stagger-toggle').checked = config.lyricStagger !== false;
+  document.getElementById('fade-past-lyrics-toggle').checked = !!config.fadePastLyrics;
   document.getElementById('prefer-song-mode-toggle').checked = !!config.preferSongMode;
   document.getElementById('apple-bg-toggle').checked = !!config.appleBg;
   document.getElementById('low-cpu-toggle').checked = !!config.lowCpuMode;
@@ -6363,6 +6488,8 @@ function renderSettingsPanel() {
   refreshUiLangGroup();
 
   if (draft) writeSettingsDraft(draft);
+  updateLyricMotionSettingsState();
+  document.getElementById('low-cpu-toggle').addEventListener('change', updateLyricMotionSettingsState);
 
   // 閉じるボタン(保存していない変更は捨てる)
   const closeBtn = document.getElementById('ytm-settings-close-btn');
@@ -6444,7 +6571,9 @@ function renderSettingsPanel() {
     config.useTrans = document.getElementById('trans-toggle').checked;
     config.useSharedTranslateApi = document.getElementById('shared-trans-toggle').checked;
     config.leftAlignInfo = document.getElementById('left-align-toggle').checked;
-    config.keepPastLyrics = document.getElementById('keep-past-lyrics-toggle').checked;
+    config.lyricStagger = document.getElementById('lyric-stagger-toggle').checked;
+    config.fadePastLyrics = document.getElementById('fade-past-lyrics-toggle').checked;
+    config.keepPastLyrics = !config.fadePastLyrics;
     config.preferSongMode = document.getElementById('prefer-song-mode-toggle').checked;
     config.appleBg = document.getElementById('apple-bg-toggle').checked;
     config.lowCpuMode = document.getElementById('low-cpu-toggle').checked;
@@ -6467,7 +6596,8 @@ function renderSettingsPanel() {
       storage.set('ytm_trans_enabled', config.useTrans),
       storage.set('ytm_shared_trans_enabled', config.useSharedTranslateApi),
       storage.set('ytm_left_align', config.leftAlignInfo),
-      storage.set('ytm_keep_past_lyrics', config.keepPastLyrics),
+      storage.set('ytm_lyric_stagger', config.lyricStagger),
+      storage.set('ytm_fade_past_lyrics', config.fadePastLyrics),
       storage.set('ytm_prefer_song_mode', config.preferSongMode),
       storage.set('ytm_apple_bg', config.appleBg),
       storage.set('ytm_low_cpu_mode', config.lowCpuMode),
@@ -6493,6 +6623,7 @@ function renderSettingsPanel() {
     document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
     document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
     applyAppleSyncClass();
+    applyLyricEffectsSettings();
     if (PipManager.pipWindow?.document) {
       PipManager.pipWindow.document.body.classList.toggle('ytm-keep-past-lyrics', !!config.keepPastLyrics);
       PipManager.pipWindow.document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
@@ -7962,6 +8093,7 @@ const optimizeLineBreaks = (text) => {
 };
 function renderLyrics(data) {
   if (!ui.lyrics) return;
+  _lyricCompletionData = null;
   document.body.classList.remove('ytm-animated-caption-mode');
   ui.lyrics.classList.remove('ytm-user-browsing-lyrics');
   animatedCaptionFrameKey = '';
@@ -7975,6 +8107,7 @@ function renderLyrics(data) {
   ui.lyrics._lastScrolledIndex = -1;
   ui.lyrics._instantNextScroll = true;
   if (PipManager.pipWindow && PipManager.pipLyricsContainer) {
+    resetLyricRowMotion(PipManager.pipLyricsContainer);
     PipManager.pipLyricsContainer._lastScrolledIndex = -1;
     PipManager.pipLyricsContainer._instantNextScroll = true;
   }
@@ -8196,6 +8329,7 @@ function renderLyrics(data) {
       PipManager.pipWindow.document.body.classList.toggle('ytm-singer-colors-enabled', !!config.useSingerColors);
     }
   }
+  refreshCompletedLyrics(getCurrentPlaybackTimeSec(), document.querySelector('video')?.duration);
 }
 
 const handleUpload = (e) => {
@@ -8268,8 +8402,131 @@ const SCROLL_SETTLE_VEL = 8;
 // 自分が書いた位置からこれ以上ずれていたら、誰かが動かしたとみなして譲る
 const SCROLL_HANDOVER_PX = 4;
 
-const snapLyricScroll = (container) => {
-  if (!container || container._scrollTarget === undefined) return;
+// 行の移動は同じ rAF で進める。スクロール量を打ち消す translate を持たせる
+// ことで、後続行は待ち時間が終わるまで画面上の位置を保つ。
+// transform は行の拡大・文字同期が使うので、独立した translate だけを触る。
+const LYRIC_STAGGER_DELAY = 0.032;
+const LYRIC_STAGGER_MAX_ROWS = 32;
+const LYRIC_STAGGER_STIFFNESS = 145;
+const LYRIC_STAGGER_DAMPING = 19;
+
+const isLyricRowMotionEnabled = () => typeof config !== 'undefined' &&
+  config.lyricStagger !== false && !config.lowCpuMode;
+
+// 自動追従へ戻る途中は、読んでいた過去行をまだ消さない。
+// 復帰タイマーだけでは呼ばず、実際のスクロール・行のばねが着いた時に呼ぶ。
+const finishLyricBrowseReturn = (container) => {
+  if (!container?._ytmResumeFadeAfterScroll || container._scrollTarget !== undefined ||
+    container._ytmRowMotion) return;
+  container._ytmResumeFadeAfterScroll = false;
+  container.classList?.remove('ytm-user-browsing-lyrics');
+};
+
+const resetLyricRowMotion = (container) => {
+  const motion = container?._ytmRowMotion;
+  if (!motion) return;
+  for (const state of motion.rows) {
+    state.row.style.translate = '';
+    state.row._ytmScrollOffset = 0;
+  }
+  container._ytmRowMotion = undefined;
+};
+
+const startLyricRowMotion = (container, target, primaryIndex) => {
+  const rows = container.children;
+  const height = container.clientHeight;
+  const travel = target - container.scrollTop;
+  if (!isLyricRowMotionEnabled() || !rows?.length || !height ||
+    !Number.isInteger(primaryIndex) || Math.abs(travel) > height * 1.5) {
+    resetLyricRowMotion(container);
+    return;
+  }
+  const previous = container._ytmRowMotion;
+  const previousStates = new Map((previous?.rows || []).map(state => [state.row, state]));
+  const top = container.getBoundingClientRect().top;
+  const margin = Math.max(80, Math.abs(travel));
+  const first = Math.max(0, primaryIndex - (LYRIC_STAGGER_MAX_ROWS / 2));
+  const end = Math.min(rows.length, first + LYRIC_STAGGER_MAX_ROWS);
+  const states = [];
+  // レイアウトを読むのは行が切り替わった時だけ。長い曲でも測定は最大32行。
+  for (let i = first; i < end; i++) {
+    const row = rows[i];
+    if (!row.classList.contains('lyric-line')) continue;
+    const rect = row.getBoundingClientRect();
+    const naturalTop = rect.top - (row._ytmScrollOffset || 0);
+    if (!rect.height || naturalTop + rect.height < top - margin ||
+      naturalTop > top + height + margin) continue;
+    const prior = previousStates.get(row);
+    states.push(prior || {
+      row,
+      pos: container.scrollTop - (row._ytmScrollOffset || 0),
+      vel: 0,
+      delay: states.length * LYRIC_STAGGER_DELAY,
+    });
+    previousStates.delete(row);
+  }
+  // 今回の表示範囲から外れた行に補正を残さない。
+  for (const state of previousStates.values()) {
+    state.row.style.translate = '';
+    state.row._ytmScrollOffset = 0;
+  }
+  container._ytmRowMotion = states.length ? { rows: states, target } : undefined;
+};
+
+const stepLyricRowMotion = (container, dt) => {
+  const motion = container._ytmRowMotion;
+  if (!motion) return;
+  if (!isLyricRowMotionEnabled()) {
+    resetLyricRowMotion(container);
+    finishLyricBrowseReturn(container);
+    return;
+  }
+  let moving = false;
+  const scrollTop = container.scrollTop;
+  for (const state of motion.rows) {
+    let activeDt = dt;
+    if (state.delay > 0) {
+      const wait = Math.min(activeDt, state.delay);
+      state.delay -= wait;
+      activeDt -= wait;
+    }
+    // 大きなフレーム間隔でもばねが暴れないよう小分けに積分する。
+    while (activeDt > 0) {
+      const step = Math.min(activeDt, 1 / 120);
+      state.vel += (-LYRIC_STAGGER_STIFFNESS * (state.pos - motion.target) -
+        LYRIC_STAGGER_DAMPING * state.vel) * step;
+      state.pos += state.vel * step;
+      activeDt -= step;
+    }
+    if (state.delay <= 0 && Math.abs(state.pos - motion.target) < SCROLL_SETTLE_PX &&
+      Math.abs(state.vel) < SCROLL_SETTLE_VEL) {
+      state.pos = motion.target;
+      state.vel = 0;
+    } else {
+      moving = true;
+    }
+    const offset = Number((scrollTop - state.pos).toFixed(3));
+    if (state.row._ytmScrollOffset !== offset) {
+      state.row._ytmScrollOffset = offset;
+      state.row.style.translate = `0 ${offset}px`;
+    }
+  }
+  if (!moving && container._scrollTarget === undefined) {
+    resetLyricRowMotion(container);
+    finishLyricBrowseReturn(container);
+  }
+};
+
+const snapLyricScroll = (container, preserveRowMotion = false) => {
+  const hadRowMotion = !!container?._ytmRowMotion;
+  if (!preserveRowMotion) resetLyricRowMotion(container);
+  if (!container) return;
+  if (container._scrollTarget === undefined) {
+    // 外側が到着済みで行だけが動いていた場合、一時停止の補正解除で復帰完了。
+    // 再生停止中に復帰タイマーだけが切れた場合は、表示を保って再開を待つ。
+    if (hadRowMotion && !preserveRowMotion) finishLyricBrowseReturn(container);
+    return;
+  }
   container.scrollTop = container._scrollTarget;
   // 書いた値ではなく、丸められた実際の値を覚える。
   // scrollTop は 0〜(scrollHeight - clientHeight) に丸められる。中央合わせの
@@ -8283,6 +8540,7 @@ const snapLyricScroll = (container) => {
   container._scrollLastWritten = container.scrollTop;
   container._scrollVel = 0;
   container._scrollTarget = undefined;
+  finishLyricBrowseReturn(container);
 };
 
 // 先頭へ戻す時など、ばねの外から scrollTop を書く場合はこれを通す。
@@ -8290,6 +8548,8 @@ const snapLyricScroll = (container) => {
 // 誤判定して追従が止まる。
 const resetLyricScrollState = (container, top = 0) => {
   if (!container) return;
+  container._ytmResumeFadeAfterScroll = false;
+  resetLyricRowMotion(container);
   container.scrollTop = top;
   container._scrollTarget = undefined;
   container._scrollVel = 0;
@@ -8330,8 +8590,12 @@ const lyricAnchorOffset = (container, rowHeight) => {
   return lines * rowHeight;
 };
 
-const requestLyricScroll = (container, target, instant) => {
+const requestLyricScroll = (container, target, instant, primaryIndex) => {
   if (!container) return;
+  // 行側のばねもブラウザが到達できる位置を目標にする。
+  if (Number.isFinite(container.scrollHeight) && Number.isFinite(container.clientHeight)) {
+    target = Math.max(0, Math.min(target, container.scrollHeight - container.clientHeight));
+  }
   if (instant) {
     container._scrollTarget = target;
     snapLyricScroll(container);
@@ -8341,6 +8605,7 @@ const requestLyricScroll = (container, target, instant) => {
   // レイアウトが変わったということ。そこから引き継ぐ。
   const written = container._scrollLastWritten;
   if (written === undefined || Math.abs(container.scrollTop - written) > SCROLL_HANDOVER_PX) {
+    resetLyricRowMotion(container);
     container._scrollPos = container.scrollTop;
     container._scrollVel = 0;
     // 引き継いだ位置を「自分が書いた位置」としても覚える。ここを古いまま
@@ -8351,17 +8616,19 @@ const requestLyricScroll = (container, target, instant) => {
     // 動かず、歌っている行は画面外のまま)。
     container._scrollLastWritten = container.scrollTop;
   }
+  startLyricRowMotion(container, target, primaryIndex);
   container._scrollTarget = target;
 };
 
 const stepLyricScroll = (container, dt) => {
-  if (!container || container._scrollTarget === undefined) return;
+  if (!container || (container._scrollTarget === undefined && !container._ytmRowMotion)) return;
 
   // 動かしている最中にユーザーが触ったら、そちらを優先して手を引く
   if (container._scrollLastWritten !== undefined &&
     Math.abs(container.scrollTop - container._scrollLastWritten) > SCROLL_HANDOVER_PX) {
     container._scrollTarget = undefined;
     container._scrollVel = 0;
+    resetLyricRowMotion(container);
     // 途中で手を引いたなら、その行へは行き着いていない。
     // 「スクロール済み」の印を戻して次のフレームで出し直せるようにする。
     // これが無いと、翻訳の到着で行の高さが変わるなど、ユーザー操作以外で
@@ -8373,12 +8640,17 @@ const stepLyricScroll = (container, dt) => {
   }
 
   const target = container._scrollTarget;
+  if (target === undefined) {
+    stepLyricRowMotion(container, dt);
+    return;
+  }
   let pos = container._scrollPos ?? container.scrollTop;
   let vel = container._scrollVel || 0;
   const diff = pos - target;
 
   if (Math.abs(diff) < SCROLL_SETTLE_PX && Math.abs(vel) < SCROLL_SETTLE_VEL) {
-    snapLyricScroll(container);
+    snapLyricScroll(container, true);
+    stepLyricRowMotion(container, dt);
     return;
   }
 
@@ -8389,6 +8661,7 @@ const stepLyricScroll = (container, dt) => {
   container._scrollVel = vel;
   container.scrollTop = pos;
   container._scrollLastWritten = container.scrollTop;
+  stepLyricRowMotion(container, dt);
 
   // 自分で動かしているぶんの scroll イベントを、ユーザー操作と
   // 取り違えられないようにしておく(どちらの判定もこれを最初に見る)。
@@ -8526,6 +8799,7 @@ function startLyricRafLoop() {
             updateAnimatedCaptionStage(t);
           }
           if (!animatedCaptionData && lyricsData.length && hasTimestamp) {
+            refreshCompletedLyrics(t, v.duration);
             updateLyricHighlight(t);
           }
         } catch (err) {
@@ -8537,6 +8811,7 @@ function startLyricRafLoop() {
 
         scheduleNextFrame();
       } else {
+        if (!animatedCaptionData) refreshCompletedLyrics(v.ended ? v.duration : getCurrentPlaybackTimeSec(), v.duration);
         // 止まっている間はループが回らない。中途半端な位置で残らないよう着地させる。
         snapLyricScroll(ui.lyrics);
         snapLyricScroll(PipManager.pipLyricsContainer);
@@ -8575,6 +8850,7 @@ const recenterLyricsAfterResize = () => {
     // 追いかけている途中の目標も、前の大きさで出した px なので捨てる。
     container._scrollTarget = undefined;
     container._scrollVel = 0;
+    resetLyricRowMotion(container);
   }
 };
 
@@ -8607,6 +8883,13 @@ document.addEventListener('seeked', (e) => {
   if (e.target.tagName !== 'VIDEO') return;
   const t = e.target.currentTime;
   if (typeof t === 'number' && timeOffset > 0 && t < timeOffset) timeOffset = 0;
+  for (const container of [ui.lyrics, PipManager.pipLyricsContainer]) {
+    if (!container) continue;
+    resetLyricRowMotion(container);
+    container._instantNextScroll = true;
+    container._lastScrolledIndex = -1;
+  }
+  refreshCompletedLyrics(getCurrentPlaybackTimeSec(), e.target.duration);
 }, true);
 
 
@@ -8984,7 +9267,7 @@ function updateLyricHighlight(currentTime) {
             // getBoundingClientRect を使って要素の絶対位置から確実なスクロール量を計算
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
-            const targetScroll = container.scrollTop + rRect.top - containerRect.top
+            const targetScroll = container.scrollTop + rRect.top - (r._ytmScrollOffset || 0) - containerRect.top
               - lyricAnchorOffset(container, rRect.height);
 
             isProgrammaticScrolling = true;
@@ -8994,7 +9277,7 @@ function updateLyricHighlight(currentTime) {
             programmaticScrollMaxTimeout = setTimeout(() => { isProgrammaticScrolling = false; }, 1200);
             if (scrollBehavior === 'auto') suppressUserScrollDetection(300);
 
-            requestLyricScroll(container, targetScroll, scrollBehavior === 'auto');
+            requestLyricScroll(container, targetScroll, scrollBehavior === 'auto', idx);
 
             container._lastScrolledIndex = idx;
             if (idx !== _lastCountedLyricIndex) {
@@ -9008,10 +9291,10 @@ function updateLyricHighlight(currentTime) {
 
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
-            const targetScroll = container.scrollTop + rRect.top - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
+            const targetScroll = container.scrollTop + rRect.top - (r._ytmScrollOffset || 0) - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
 
             container._isProgrammaticScrolling = true;
-            requestLyricScroll(container, targetScroll, scrollBehavior === 'auto');
+            requestLyricScroll(container, targetScroll, scrollBehavior === 'auto', idx);
 
             container._lastScrolledIndex = idx;
           }
@@ -9614,8 +9897,7 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   const leftAlignStored = await storage.get('ytm_left_align');
   if (leftAlignStored !== null) config.leftAlignInfo = leftAlignStored;
   document.body.classList.toggle('ytm-align-left', !!config.leftAlignInfo);
-  const keepPastStored = await storage.get('ytm_keep_past_lyrics');
-  if (keepPastStored !== null && keepPastStored !== undefined) config.keepPastLyrics = !!keepPastStored;
+  await restoreLyricEffectsPreferences();
   document.body.classList.toggle('ytm-keep-past-lyrics', !!config.keepPastLyrics);
   const preferSongModeStored = await storage.get('ytm_prefer_song_mode');
   if (preferSongModeStored !== null && preferSongModeStored !== undefined) {
@@ -9631,6 +9913,7 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   const lowCpuStored = await storage.get('ytm_low_cpu_mode');
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
   document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
+  applyLyricEffectsSettings();
 })().catch((error) => {
   console.warn('[YTM] Failed to restore saved runtime settings:', error);
 });

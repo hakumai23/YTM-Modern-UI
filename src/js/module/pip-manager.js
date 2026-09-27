@@ -259,21 +259,27 @@ const forceStyle = pipDoc.createElement('style');
           text-shadow: none !important;
         }
 
-        /* 通常画面と同じく、再生が終わった行は位置を保ったままフェードする。 */
+        /* 完了行の表示設定と手動スクロール中の再表示を通常画面と揃える。 */
         #pip-lyrics-container .lyric-line.lyric-past {
-          opacity: 0 !important;
-          visibility: hidden;
-          pointer-events: none;
+          opacity: 0.3 !important;
+          visibility: visible;
+          pointer-events: auto;
           transition: transform 0.5s, color 0.5s, filter 0.5s,
-                      opacity 1.2s ease 0.3s, visibility 0s linear 1.5s !important;
+                      opacity 0.5s ease, visibility 0s !important;
         }
-        #pip-lyrics-container.ytm-user-browsing-lyrics .lyric-line.lyric-past,
-        body.ytm-keep-past-lyrics #pip-lyrics-container .lyric-line.lyric-past {
+        #pip-lyrics-container.ytm-user-browsing-lyrics .lyric-line.lyric-completed {
           opacity: 0.3 !important;
           visibility: visible;
           pointer-events: auto;
           transition: transform 0.5s, color 0.5s, filter 0.5s,
                       opacity 0.2s ease, visibility 0s !important;
+        }
+        body.ytm-fade-past-lyrics #pip-lyrics-container:not(.ytm-user-browsing-lyrics) .lyric-line.lyric-completed {
+          opacity: 0 !important;
+          visibility: hidden;
+          pointer-events: none;
+          transition: transform 0.5s, color 0.5s, filter 0.5s,
+                      opacity 1s ease, visibility 0s linear 1s !important;
         }
         
         .lyric-translation { font-size: 0.6em; opacity: 0.5; font-weight: 600; margin-top: 4px; display: block; }
@@ -365,6 +371,7 @@ const forceStyle = pipDoc.createElement('style');
       if (document.body.classList.contains('ytm-no-timestamp')) pipDoc.body.classList.add('ytm-no-timestamp');
       if (document.body.classList.contains('ytm-animated-caption-mode')) pipDoc.body.classList.add('ytm-animated-caption-mode');
       if (document.body.classList.contains('ytm-keep-past-lyrics')) pipDoc.body.classList.add('ytm-keep-past-lyrics');
+      if (document.body.classList.contains('ytm-fade-past-lyrics')) pipDoc.body.classList.add('ytm-fade-past-lyrics');
       if (document.body.classList.contains('ytm-singer-colors-enabled')) pipDoc.body.classList.add('ytm-singer-colors-enabled');
 
       // 曲名・アーティスト名・画像 URL は YTM から来る文字列。そのまま
@@ -410,32 +417,46 @@ pipDoc.body.innerHTML = `
 
       this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
       this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
+      // 複製元の行が動いていても、小窓にはその瞬間の移動量を持ち込まない。
+      for (const row of this.pipLyricsContainer.children) row.style.translate = '';
       this.pipLyricsContainer._lastScrolledIndex = -1;
       this.pipLyricsContainer._isUserScrolling = false;
       this.pipLyricsContainer._isProgrammaticScrolling = false;
       let userScrollPipTimeout = null;
 
-      this.pipLyricsContainer.addEventListener('scroll', () => {
+      const handleUserScroll = (event) => {
         if (!this.pipLyricsContainer) return;
         // 自動スクロールは毎フレーム scrollTop を書くので、その間の
         // scroll イベントをユーザー操作と取り違えない
         // (lyrics-ui の stepLyricScroll がこの時刻を伸ばし続ける)。
-        if (performance.now() < (this.pipLyricsContainer._suppressUserScrollUntil || 0)) return;
-        if (this.pipLyricsContainer._isProgrammaticScrolling) {
+        const directInput = event.type !== 'scroll';
+        if (!directInput && performance.now() < (this.pipLyricsContainer._suppressUserScrollUntil || 0)) return;
+        if (!directInput && this.pipLyricsContainer._isProgrammaticScrolling) {
           this.pipLyricsContainer._isProgrammaticScrolling = false;
           return;
         }
         this.pipLyricsContainer._isUserScrolling = true;
+        this.pipLyricsContainer._isProgrammaticScrolling = false;
+        this.pipLyricsContainer._ytmResumeFadeAfterScroll = false;
+        this.pipLyricsContainer._scrollTarget = undefined;
+        this.pipLyricsContainer._scrollVel = 0;
+        resetLyricRowMotion(this.pipLyricsContainer);
         this.pipLyricsContainer.classList.add('ytm-user-browsing-lyrics');
         clearTimeout(userScrollPipTimeout);
         userScrollPipTimeout = setTimeout(() => {
           if (this.pipLyricsContainer) {
             this.pipLyricsContainer._isUserScrolling = false;
             this.pipLyricsContainer._lastScrolledIndex = -1;
-            this.pipLyricsContainer.classList.remove('ytm-user-browsing-lyrics');
+            this.pipLyricsContainer._ytmResumeFadeAfterScroll = true;
           }
-        }, 2000);
-      }, { passive: true });
+        }, 3000);
+      };
+      for (const type of ['scroll', 'wheel', 'touchmove']) {
+        this.pipLyricsContainer.addEventListener(type, handleUserScroll, { passive: true });
+      }
+      this.pipLyricsContainer.addEventListener('keydown', (event) => {
+        if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) handleUserScroll(event);
+      });
 
       const likeBtn = pipDoc.getElementById('pip-like-btn');
       const prevBtn = pipDoc.getElementById('pip-prev-btn'); // ★ 追加
