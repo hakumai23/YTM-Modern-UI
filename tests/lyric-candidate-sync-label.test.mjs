@@ -85,6 +85,10 @@ test('品質ラベルの並びが quality の段と合っている', () => {
   const labels = uiSource.match(/const LYRICS_QUALITY_LABELS = \[([^\]]+)\]/)
   assert.ok(labels, 'ラベル定義が見つからない')
   assert.match(labels[1], /'行同期',\s*'単語同期',\s*'字幕同期'/)
+  // 取得元の表示で使う文言の鍵も同じ並び
+  const keys = uiSource.match(/const LYRICS_QUALITY_LABEL_KEYS = \[([^\]]+)\]/)
+  assert.ok(keys, '鍵の定義が見つからない')
+  assert.match(keys[1], /'lyrics_quality_none',\s*'lyrics_quality_line',\s*'lyrics_quality_word',\s*'lyrics_quality_caption'/)
 
   const quality = uiSource.slice(
     uiSource.indexOf('const quality = useAnimated'),

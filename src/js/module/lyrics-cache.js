@@ -75,5 +75,5 @@ const LyricsCache = (() => {
     });
   });
 
-  return { MAX_ENTRIES, stripCandidateLyrics, prune };
+  return { MAX_ENTRIES, stripCandidateLyrics, isUserOwned, prune };
 })();

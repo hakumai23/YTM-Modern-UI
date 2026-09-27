@@ -73,7 +73,9 @@ test('即時ジャンプの意図を、見送った回に捨てない', () => {
     uiSource.indexOf("const scrollBehavior = container._instantNextScroll"),
     uiSource.indexOf('ReplayManager.incrementLyricCount()'),
   )
-  const bailAt = block.indexOf('if (isUserScrolling) continue;')
+  // 歌詞カードで行を選んでいる間も同じ所で見送る
+  const bail = block.match(/if \(isUserScrolling(?: \|\| _lyricsAutoFollowHold)?\) continue;/)
+  const bailAt = bail ? bail.index : -1
   const clearAt = block.indexOf('container._instantNextScroll = false;')
   assert.ok(bailAt !== -1 && clearAt !== -1)
   assert.ok(bailAt < clearAt, '見送る前に意図を捨てている')
@@ -84,7 +86,7 @@ test('ユーザーが掴んでいる間は出し直さない', () => {
     uiSource.indexOf("const scrollBehavior = container._instantNextScroll"),
     uiSource.indexOf('ReplayManager.incrementLyricCount()'),
   )
-  assert.match(block, /if \(isUserScrolling\) continue;/)
+  assert.match(block, /if \(isUserScrolling(?: \|\| _lyricsAutoFollowHold)?\) continue;/)
 })
 
 // ── 端に当たった時の記録 ──────────────────────────────

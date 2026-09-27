@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YTM-Immersion",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "YouTube Musicをもっと美しく",
   "permissions": [
     "storage",
@@ -24,7 +24,8 @@
     "https://cdn.jsdelivr.net/*",
     "https://krcs.kugou.com/*",
     "https://lyrics.kugou.com/*",
-    "https://api.liriqo-alfarrizi.workers.dev/*"
+    "https://api.liriqo-alfarrizi.workers.dev/*",
+    "https://buaaa.buachi.work/*"
   ],
   "options_ui": {
     "page": "src/options.html",
@@ -45,9 +46,11 @@
         "src/js/module/lyrics-cache.js",
         "src/js/module/replay-manager.js",
         "src/js/module/replay-share.js",
+        "src/js/module/lyric-card.js",
         "src/js/module/queue-manager.js",
         "src/js/module/pip-manager.js",
         "src/js/module/ytm-lyrics.js",
+        "src/js/module/budoux-ja.js",
         "src/js/module/lyrics-ui.js",
         "src/js/content.js"
       ],
@@ -61,7 +64,8 @@
     {
       "resources": [
         "src/assets/fonts/*.woff2",
-        "src/assets/icons/*.png"
+        "src/assets/icons/*.png",
+        "src/options.html"
       ],
       "matches": [
         "https://music.youtube.com/*"

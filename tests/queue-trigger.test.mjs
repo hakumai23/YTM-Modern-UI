@@ -61,3 +61,24 @@ test('離れたら滞留の予約を取り消す', () => {
   )
   assert.match(leave, /cancelDwell\(\)/)
 })
+
+// Immersion の外では帯も Up Next も出さない。
+// 実機(1440px 幅、ミニプレイヤーでホームを表示)では、見えない帯が右端
+// 1373〜1425px を覆い、畳んだプレイヤーバーの「プレイヤーを開く」ボタンの
+// クリックを奪っていた。そこに留まるとホーム画面の上に Up Next が滑り出た。
+test('Immersion の外では帯と Up Next を隠す', () => {
+  const hide = cssSource.match(
+    /body:not\(\.ytm-custom-layout\) #ytm-queue-trigger,\s*body:not\(\.ytm-custom-layout\) #ytm-queue-panel \{\s*display: none !important;/,
+  )
+  assert.ok(hide, 'Immersion の外でも帯が YTM の上に乗っている')
+})
+
+test('Immersion の外では留まっても開かない', () => {
+  const enter = queueSource.slice(
+    queueSource.indexOf("trigger.addEventListener('mouseenter'"),
+    queueSource.indexOf("panel.addEventListener('mouseenter'"),
+  )
+  const guard = enter.indexOf("if (!document.body.classList.contains('ytm-custom-layout')) return;")
+  assert.ok(guard !== -1, 'Immersion の外でも開いてしまう')
+  assert.ok(guard < enter.indexOf('openPanel()'))
+})

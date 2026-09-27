@@ -876,6 +876,20 @@ const normalizeSourceMode = (value) => (
         : 'ytm'
 );
 
+// 設定の「歌詞ソース」タブでオフにした標準の取得元。本体は
+// lyric-sources.js(ES module なのでここからは import できない)。
+// キー名と ID の並びはあちらと揃えること。
+// YTM だけはここで止める。取得が content script でしかできないため。
+// 残りは background が同じキーを読んで止める。
+const DISABLED_LYRIC_SOURCES_KEY = 'ytm_disabled_lyric_sources';
+const BUILTIN_LYRIC_SOURCE_IDS = ['ytm', 'lrchub', 'lrclib', 'simpmusic', 'lyricsplus'];
+const normalizeDisabledLyricSources = (value) => (
+  Array.isArray(value)
+    ? [...new Set(value.map(v => String(v || '').trim().toLowerCase()).filter(id => BUILTIN_LYRIC_SOURCE_IDS.includes(id)))]
+    : []
+);
+const isLyricSourceOn = (id) => !normalizeDisabledLyricSources(config.disabledLyricSources).includes(id);
+
 // Apple Music 風の同期表示は body のクラスで切り替える。
 // 軽量モードでも動かす。
 //
@@ -1909,13 +1923,24 @@ const getCurrentVideoIdFromDom = () => {
   return null;
 };
 
+// プレイヤーページを閉じて(ミニプレイヤーで)ホームや検索を見ている間は、
+// URL から v= が消え、プレイヤーバーにも watch へのリンクが無い(実機で確認)。
+// その間も埋め込みプレイヤーのタイトルリンクは再生中の曲を指していて、
+// 曲送りから 250ms 以内に書き換わる。最後の手がかりとしてここを読む。
+// これが無いと videoId が取れず、Daily Replay がブラウズ中の再生を一切
+// 数えず、PiP も曲の切り替わりを追えなかった。
+const getVideoIdFromEmbeddedPlayer = () => {
+  const link = document.querySelector('#movie_player a.ytp-title-link, a.ytp-title-link');
+  return extractVideoIdFromHref(link && (link.getAttribute('href') || link.href));
+};
+
 const getCurrentVideoUrl = () => {
   try {
     const domVid = getCurrentVideoIdFromDom();
     if (domVid) return `https://youtu.be/${domVid}`;
 
     const url = new URL(location.href);
-    const vid = url.searchParams.get('v');
+    const vid = url.searchParams.get('v') || getVideoIdFromEmbeddedPlayer();
     return vid ? `https://youtu.be/${vid}` : location.href;
   } catch (e) {
     console.warn('Failed to get current video url', e);
@@ -1929,7 +1954,7 @@ const getCurrentVideoId = () => {
     if (domVid) return domVid;
 
     const url = new URL(location.href);
-    return url.searchParams.get('v');
+    return url.searchParams.get('v') || getVideoIdFromEmbeddedPlayer();
   } catch (e) {
     return null;
   }
@@ -2062,6 +2087,8 @@ const LYRICS_SOURCE_LABELS = {
 // 統合時に上流が 3(単語同期) と 4(srv3 字幕) を入れ替えたので、
 // ここも入れ替えてある。片方だけ直すと表示が嘘になる。
 const LYRICS_QUALITY_LABELS = ['', '時刻なし', '行同期', '単語同期', '字幕同期'];
+// 取得元の表示(ボタン列の下)に出す時は表示言語に合わせる。並びは上と同じ。
+const LYRICS_QUALITY_LABEL_KEYS = ['', 'lyrics_quality_none', 'lyrics_quality_line', 'lyrics_quality_word', 'lyrics_quality_caption'];
 
 // ── 手を動かしている間だけ出すもの ──────────────────────
 // 聴いているだけの間は画面に何も足さない。没入が主眼なので、常設の
@@ -2180,7 +2207,6 @@ function updateLyricsSourceDebugBadge(payload) {
     // 押せるものになったので、読み上げからも隠さない
     el.setAttribute('role', 'button');
     el.setAttribute('tabindex', '0');
-    el.title = '歌詞の取得元を切り替える / ズレを直す';
     const open = (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -2211,11 +2237,21 @@ function updateLyricsSourceDebugBadge(payload) {
   try {
     quality = selectLyricsPayload(payload).quality;
   } catch (e) { /* 品質が読めなくても取得元は出す */ }
-  const qualityLabel = LYRICS_QUALITY_LABELS[quality] || '';
+  const qualityKey = LYRICS_QUALITY_LABEL_KEYS[quality] || '';
 
-  const parts = [label];
-  if (qualityLabel) parts.push(qualityLabel);
-  el.textContent = `歌詞ソース: ${parts.join(' / ')}`;
+  el.dataset.sourceLabel = label;
+  el.dataset.qualityKey = qualityKey;
+  applyLyricsSourceBadgeText(el);
+}
+
+// 取得元の表示の文言。以前は「歌詞ソース:」と同期の粒度が日本語で固定だった。
+// 表示言語を保存した時にも呼ぶ(取得元の名前と粒度は要素に持たせてある)。
+function applyLyricsSourceBadgeText(el = document.getElementById('ytm-lyrics-source-debug')) {
+  if (!el || !el.dataset.sourceLabel) return;
+  const parts = [el.dataset.sourceLabel];
+  if (el.dataset.qualityKey) parts.push(t(el.dataset.qualityKey));
+  el.textContent = `${t('lyrics_source_prefix')}: ${parts.join(' / ')}`;
+  el.title = t('lyrics_source_hint');
 }
 
 function updateLyricsSourceState(payload, notify = true) {
@@ -2279,9 +2315,9 @@ async function applyLateLyricsUpgrade(payload) {
   const lateSource = payload && payload.lyricsSource;
   const upgradableSources = [
     'lrchub', 'ytm', 'simpmusic', 'lyricsplus',
-    // extra-providers.js の4つ。ここに足し忘れると、background が
+    // extra-providers.js の取得元。ここに足し忘れると、background が
     // 単語同期を届けても UI 側が黙って捨てる。
-    'amll', 'netease', 'kugou', 'liriqo',
+    'amll', 'netease', 'kugou', 'liriqo', 'buaaa',
   ];
   if (!payload || !upgradableSources.includes(lateSource) || !payload.success) return;
   if (!currentKey || payload.track_key !== currentKey) return;
@@ -2723,6 +2759,7 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_sync_offset',
   'ytm_save_sync_offset',
   'ytm_lyric_source_mode',
+  'ytm_disabled_lyric_sources',
   'ytm_queue_pinned',
 ];
 const MEANING_PINNED_SONGS_KEY = 'ytm_meaning_pinned_songs';
@@ -3512,7 +3549,10 @@ const lyricUnitSegmenter = (() => {
 const CJK_GLYPH_RE = /[⺀-〾ぁ-㏿㐀-䶿一-鿿豈-﫿＀-ﾟ￠-￦가-힯]/;
 // 拗音・促音・長音・濁点や閉じ括弧は、単独では1拍にならない。
 // 前の字にぶら下げて「ちゃ」「きゅう」を一息で扱う。
-const CJK_TAIL_RE = /[ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮーｰ゛゜々〆、。，．！？!?)）」』】〕》〉”’]/;
+// 英語の句読点(, . ; : …)も前の語に付ける。語ごとに inline-block なので、
+// 別の単位のままだと語と句読点の間で折り返せてしまい、実機で
+// 「(Oh, my savior」「, oh, my saving」のように行頭にカンマが来ていた。
+const CJK_TAIL_RE = /[ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮーｰ゛゜々〆、。，．！？!?)）」』】〕》〉”’,.;:\]}…]/;
 
 // dynamicLines の chars を「1文字 + 開始秒」の並びに均す。
 // chars は基本 1 文字ずつだが、プロバイダーによっては "Maybe " のような
@@ -5671,6 +5711,7 @@ async function initSettings() {
   if (singerColorsStored !== null) config.useSingerColors = !!singerColorsStored;
   const sourceModeStored = await storage.get('ytm_lyric_source_mode');
   config.lyricSourceMode = normalizeSourceMode(sourceModeStored);
+  config.disabledLyricSources = normalizeDisabledLyricSources(await storage.get(DISABLED_LYRIC_SOURCES_KEY));
 
   const lowCpuStored = await storage.get('ytm_low_cpu_mode');
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
@@ -5683,26 +5724,292 @@ async function initSettings() {
   const uiScaleStored = await storage.get('ytm_ui_scale');
   if (uiScaleStored !== null) config.uiScale = normalizeUiScale(uiScaleStored);
 
-  renderSettingsPanel();
-
   if (!settingsOutsideClickSetup) {
     settingsOutsideClickSetup = true;
+    // スライダーをつまんだままパネルの外で離しても、click は外側に届く
+    // (押した所と離した所の共通の親に出る)。UI サイズを大きく動かしただけで
+    // パネルが閉じていた。押し始めがパネルの中なら外側のクリックとみなさない。
+    let pointerDownInSettings = false;
+    document.addEventListener('pointerdown', (ev) => {
+      pointerDownInSettings = isInsideSettingsUi(ev.target);
+    }, true);
     document.addEventListener('click', (ev) => {
       if (!ui.settings) return;
       if (!ui.settings.classList.contains('active')) return;
-      if (ui.settings.contains(ev.target)) return;
+      if (pointerDownInSettings || isInsideSettingsUi(ev.target)) return;
       if (ui.settingsBtn && ui.settingsBtn.contains(ev.target)) return;
-      ui.settings.classList.remove('active');
+      closeSettings();
     }, true);
 
     document.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape' && ui.settings && ui.settings.classList.contains('active')) {
-        ui.settings.classList.remove('active');
+        closeSettings();
       }
     });
   }
 }
 
+// パネルの一部とみなす所。表示言語の「etc...」の一覧は body の直下に出る。
+function isInsideSettingsUi(target) {
+  if (!target || !ui.settings) return false;
+  if (ui.settings.contains(target)) return true;
+  const etcMenu = document.getElementById('ui-lang-etc-menu');
+  return !!(etcMenu && etcMenu.contains(target));
+}
+
+// ── 設定パネルを開く・閉じる ───────────────────────────────
+// 「保存」で確定する。それ以外の閉じ方(×・Esc・外側のクリック・歯車を
+// もう一度)は、保存していない変更を捨てて開いた時の状態に戻す。
+//
+// 以前は閉じ方で結果が違った。UI サイズ・歌詞の太さ・背景の明るさは
+// 動かした時点で画面に反映され、保存せずに閉じても戻らず、再読み込みで
+// 初めて元に戻った。言語のピル(翻訳のメイン/サブ・歌詞ソースの優先・
+// 表示言語)は保存前から config を書き換えていたので、保存していない
+// 翻訳の言語が次の曲から使われた。トグルは閉じても画面に残り、次に開くと
+// 保存したかのように見え、後で別の項目を保存した時に一緒に保存された。
+//
+// 取得元ごとのオン・オフ(差し込んだ許可ページ)だけは例外で、Chrome の
+// 許可と同じくその場で保存される。こちらは閉じ方によらず、閉じた時に
+// 今の曲へ反映する(以前は親の「保存」を押した時だけ取り直していた)。
+//
+// 保存前に書き換わる config の項目。閉じた時にここへ戻す。
+const SETTINGS_LIVE_KEYS = ['uiScale', 'lyricWeight', 'bgBrightness', 'mainLang', 'subLang', 'lyricSourceMode', 'uiLang'];
+let settingsSession = null;
+let settingsActiveTab = 'visuals';
+
+const disabledSourcesKey = (list) => normalizeDisabledLyricSources(list).sort().join(',');
+
+function setOrClearRootVar(name, value) {
+  if (value) document.documentElement.style.setProperty(name, value);
+  else document.documentElement.style.removeProperty(name);
+}
+
+let settingsInitPromise = null;
+
+async function openSettings() {
+  // 最初の 1 回は保存値の読み込みを待つ。素早く 2 回押されても読み込みは 1 回
+  settingsInitPromise ||= initSettings();
+  await settingsInitPromise;
+  if (ui.settings.classList.contains('active')) return;
+  settingsSession = {
+    snapshot: Object.fromEntries(SETTINGS_LIVE_KEYS.map(key => [key, config[key]])),
+    disabledSources: disabledSourcesKey(config.disabledLyricSources),
+    // 差し込んだ許可ページから「切り替えた」と知らせが来たら立てる。
+    // 追加の取得元は Chrome の許可なので、storage を見比べても分からない。
+    sourcesChanged: false,
+  };
+  // 開くたびに保存済みの値から描き直す(前に閉じた時の書きかけを残さない)
+  renderSettingsPanel();
+  ui.settings.classList.add('active');
+}
+
+function closeSettings({ saved = false } = {}) {
+  if (!ui.settings || !ui.settings.classList.contains('active')) return;
+  ui.settings.classList.remove('active');
+  document.getElementById('ui-lang-etc-menu')?.style.setProperty('display', 'none');
+  const session = settingsSession;
+  settingsSession = null;
+  if (!session || saved) return;
+
+  const uiLangChanged = config.uiLang !== session.snapshot.uiLang;
+  Object.assign(config, session.snapshot);
+  applyUiScale(config.uiScale);
+  setOrClearRootVar('--ytm-lyric-weight', config.lyricWeight);
+  setOrClearRootVar('--ytm-bg-brightness', config.bgBrightness);
+  if (uiLangChanged) renderSettingsPanel();
+  void applySourceChangesAfterClose(session);
+}
+
+// 取得元のオン・オフは保存済み。変わっていたら今の曲を取り直す。
+async function applySourceChangesAfterClose(session) {
+  const storedDisabled = normalizeDisabledLyricSources(await storage.get(DISABLED_LYRIC_SOURCES_KEY));
+  const changed = session.sourcesChanged || session.disabledSources !== disabledSourcesKey(storedDisabled);
+  config.disabledLyricSources = storedDisabled;
+  if (!changed) return;
+  const metaNow = getMetadata();
+  if (metaNow?.title && metaNow?.artist) await loadLyrics(metaNow);
+}
+
+
+// ── 追加の歌詞サーバー(許可の切り替え) ───────────────────────
+// 通信先は optional_host_permissions なので、許可は
+// chrome.permissions.request() で取るしかない。あれはユーザー操作を起点に、
+// かつ拡張のページからしか呼べない。ここは YouTube Music に差し込んだ
+// content script なので呼べない。
+//
+// 以前は background に許可ページ(options.html)を別タブで開いてもらっていたが、
+// 許可して戻ってくるまで設定の続きが途切れる。そこで許可ページそのものを
+// iframe で差し込む。iframe の中は拡張のページなので、押したその場で
+// 許可のダイアログが出せる。
+//
+// 高さは中身に合わせる。別オリジンなのでこちらからは測れず、中身の側が
+// postMessage で知らせてくる(options.js)。受け取るのは、差し込んだ iframe
+// そのものから、拡張のオリジンで届いたものだけ。
+//
+// 何も言ってこなければ読み込めなかったとみなし、別タブで開くボタンに戻す
+// (拡張とはつながっているのに iframe だけが読めない時。web_accessible_resources
+// の書き換えや、ページ側の妨害など)。
+//
+// 拡張が更新・再読み込みされて、この content script が切り離された時は
+// 別タブのボタンも効かない(background への送信ごと失敗する)。その時は
+// ページの再読み込みを促す文だけを出す。
+//
+// なお options.html を web_accessible にしたので、YouTube Music のページ自身も
+// あのページを枠に入れられる。見えない枠を重ねてトグルを押させれば、許可の
+// 取り消しはダイアログ無しで通ってしまう。見えている時だけ受ける仕組み
+// (IntersectionObserver v2)は、中身がパネルの表示域より高くて iframe が常に
+// 一部切れているため、正規の操作まで弾いてしまい使えなかった(実測)。
+// ページ側はこの設定パネル自体も書き換えられるので、ここだけ塞いでも意味が薄い。
+// 付与には必ず Chrome 自身のダイアログが要り、取り消されても任意の取得元が
+// 1つ止まるだけなので、受け入れている。
+const EXTRA_PROVIDERS_MESSAGE_TYPE = 'ytm-immersion:extra-providers';
+const EXTRA_PROVIDERS_FRAME_TIMEOUT_MS = 5000;
+const EXTRA_PROVIDERS_FRAME_MAX_HEIGHT = 2000;
+let extraProvidersFrameState = null;
+let extraProvidersMessageSetup = false;
+// 描き直し(保存・表示言語の切り替え)のたびに iframe を作り直す。高さを 0 から
+// 始めると、中身が高さを知らせてくるまでの一瞬パネルが縮んでスクロールが跳ねる。
+// 直前の高さから始める。
+let extraProvidersLastHeight = 0;
+
+function showExtraProvidersFallback(state) {
+  clearTimeout(state.timer);
+  state.host.hidden = true;
+  if (state.fallback) state.fallback.hidden = false;
+}
+
+// content script が拡張から切り離されたか。切り離されると runtime.id が消える。
+function isExtensionContextAlive() {
+  try {
+    return !!(EXT && EXT.runtime && EXT.runtime.id);
+  } catch (e) {
+    return false;
+  }
+}
+
+function showExtraProvidersReloadNotice() {
+  if (extraProvidersFrameState) clearTimeout(extraProvidersFrameState.timer);
+  const host = document.getElementById('extra-providers-embed');
+  const fallback = document.getElementById('extra-providers-fallback');
+  const notice = document.getElementById('extra-providers-reload');
+  if (host) host.hidden = true;
+  if (fallback) fallback.hidden = true;
+  if (notice) notice.hidden = false;
+}
+
+function onExtraProvidersFrameMessage(ev) {
+  const state = extraProvidersFrameState;
+  if (!state || ev.origin !== state.origin || ev.source !== state.frame.contentWindow) return;
+  const data = ev.data;
+  if (!data || typeof data !== 'object' || data.type !== EXTRA_PROVIDERS_MESSAGE_TYPE) return;
+
+  if (data.kind === 'ready') {
+    // 遅れて届いても、いったん出した逃げ道のボタンを引っ込めて差し込みに戻す
+    state.ready = true;
+    clearTimeout(state.timer);
+    state.host.hidden = false;
+    if (state.fallback) state.fallback.hidden = true;
+    return;
+  }
+  if (data.kind === 'size') {
+    const height = Number(data.height);
+    if (!Number.isFinite(height) || height <= 0) return;
+    // 横幅が決まる前に測った高さ(とても大きい)を捨てる。受けて広げると、
+    // iframe がパネルの見えない位置まではみ出して描画を止められ、正しい高さの
+    // 知らせが届かなくなる(options.js の reportHeightToParent)。
+    const width = Number(data.width);
+    if (Number.isFinite(width) && Math.abs(width - state.frame.clientWidth) > 2) return;
+    extraProvidersLastHeight = Math.min(Math.ceil(height), EXTRA_PROVIDERS_FRAME_MAX_HEIGHT);
+    state.frame.style.height = `${extraProvidersLastHeight}px`;
+    return;
+  }
+  if (data.kind === 'sources-changed') {
+    // 取得元を切り替えた(その場で保存済み)。閉じた時に今の曲へ反映する。
+    if (settingsSession) settingsSession.sourcesChanged = true;
+    return;
+  }
+  if (data.kind === 'escape') {
+    // iframe の中にいる間は、下の keydown(Esc で閉じる)が届かない
+    closeSettings();
+    // フォーカスを親へ戻す。残すと隠れた iframe がキーを受け続け、Space などの
+    // YouTube Music のショートカットが効かなくなる(実測。押すのが早いと、
+    // 隠れたトグルが切り替わって許可のダイアログまで出た)。
+    // 歯車のボタンには移さない。そこで Space を押すと設定が開き直す。
+    state.frame.blur();
+  }
+}
+
+function mountExtraProvidersFrame() {
+  const host = document.getElementById('extra-providers-embed');
+  if (!host) return;
+  const fallback = document.getElementById('extra-providers-fallback');
+  if (extraProvidersFrameState) clearTimeout(extraProvidersFrameState.timer);
+  extraProvidersFrameState = null;
+
+  let url = null;
+  try {
+    url = isExtensionContextAlive() ? new URL(EXT.runtime.getURL('src/options.html')) : null;
+  } catch (e) {
+    url = null;
+  }
+  if (!url) {
+    // 拡張が更新・再読み込みされ、この content script が切り離されている。
+    // 別タブのボタンも効かないので、再読み込みを促す。
+    showExtraProvidersReloadNotice();
+    return;
+  }
+  url.searchParams.set('embed', '1');
+  // パネルでは保存前に表示言語を切り替えられる。中身もそれに合わせる。
+  url.searchParams.set('lang', config.uiLang || 'ja');
+
+  const frame = document.createElement('iframe');
+  frame.className = 'ytm-extra-providers-frame';
+  frame.title = t('settings_extra_providers');
+  if (extraProvidersLastHeight > 0) frame.style.height = `${extraProvidersLastHeight}px`;
+  frame.src = url.href;
+  host.replaceChildren(frame);
+
+  // url.origin は使わない。URL の仕様では chrome-extension: は「特別な
+  // スキーム」ではないのでオリジンが 'null' になりうる(Chrome は独自に
+  // 組み立てるが、それに寄りかからない)。届くメッセージの origin は
+  // 'chrome-extension://<拡張ID>' なので、同じ形をここで組む。
+  // ホストも getURL の戻り値からは採らない。web_accessible_resources に
+  // use_dynamic_url を付けると getURL は使い捨ての ID を返すが、読み込まれた
+  // ページのオリジンは本物の拡張 ID のまま(リダイレクトされる)。
+  const origin = `${url.protocol}//${EXT.runtime.id || url.host}`;
+  const state = { frame, origin, host, fallback, ready: false, timer: 0 };
+  state.timer = setTimeout(() => {
+    if (!state.ready) showExtraProvidersFallback(state);
+  }, EXTRA_PROVIDERS_FRAME_TIMEOUT_MS);
+  extraProvidersFrameState = state;
+
+  if (!extraProvidersMessageSetup) {
+    extraProvidersMessageSetup = true;
+    window.addEventListener('message', onExtraProvidersFrameMessage);
+  }
+}
+
+
+// 設定パネルの書きかけ(保存前の入力)。id の付いた input だけを見る。
+// 差し込んだ許可ページ(iframe)の中はその場で保存されるので含めない。
+function readSettingsDraft() {
+  const draft = {};
+  ui.settings.querySelectorAll('input[id]').forEach((input) => {
+    draft[input.id] = input.type === 'checkbox' ? input.checked : input.value;
+  });
+  return draft;
+}
+
+function writeSettingsDraft(draft) {
+  Object.entries(draft).forEach(([id, value]) => {
+    const input = document.getElementById(id);
+    if (!input || !ui.settings.contains(input)) return;
+    if (input.type === 'checkbox') input.checked = !!value;
+    else input.value = value;
+    // スライダーは数値の表示と塗りを合わせる(画面への反映は同じ値なので変わらない)
+    if (input.type === 'range') input.dispatchEvent(new Event('input'));
+  });
+}
 
 function renderSettingsPanel() {
   if (!ui.settings) return;
@@ -5710,10 +6017,15 @@ function renderSettingsPanel() {
   // 現在の曲IDがあるか確認（キャッシュ削除ボタンの制御用）
   const hasCurrentSong = !!currentKey;
 
+  // 開いたまま描き直す時(表示言語の切り替え)は、書きかけの値を引き継ぐ。
+  // 以前は描き直しでトグルや入力欄が保存済みの値に戻っていた。
+  const draft = ui.settings.classList.contains('active') ? readSettingsDraft() : null;
+
   // --- SVG Icons ---
   const ICONS = {
     visuals: `<svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5 11 5.67 11 6.5 10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5S18.33 12 17.5 12z"/></svg>`,
     trans: `<svg viewBox="0 0 24 24"><path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v1.99h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>`,
+    sources: `<svg viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>`,
     data: `<svg viewBox="0 0 24 24"><path d="M12 2C7.58 2 4 3.79 4 6s3.58 4 8 4 8-1.79 8-4-3.58-4-8-4zM4 8.55V12c0 2.21 3.58 4 8 4s8-1.79 8-4V8.55C18.83 9.99 15.72 11 12 11S5.17 9.99 4 8.55zM4 14.55V18c0 2.21 3.58 4 8 4s8-1.79 8-4v-3.45C18.83 15.99 15.72 17 12 17s-6.83-1.01-8-2.45z"/></svg>`,
     save: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7l-4-4zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10v4z"/></svg>`,
     trash: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`,
@@ -5728,16 +6040,19 @@ function renderSettingsPanel() {
       <div class="settings-tabs">
         <div class="settings-tabs-header">
           <span class="settings-app-name">YTM Immersion</span>
-          <span class="settings-app-caption">Settings</span>
+          <span class="settings-app-caption">${t('settings_title')}</span>
         </div>
-        <button class="settings-tab-btn active" data-tab="visuals">
-          ${ICONS.visuals}<span>Visuals</span>
+        <button class="settings-tab-btn" data-tab="visuals">
+          ${ICONS.visuals}<span>${t('settings_tab_visuals')}</span>
+        </button>
+        <button class="settings-tab-btn" data-tab="sources">
+          ${ICONS.sources}<span>${t('settings_tab_sources')}</span>
         </button>
         <button class="settings-tab-btn" data-tab="translation">
-          ${ICONS.trans}<span>Translation</span>
+          ${ICONS.trans}<span>${t('settings_tab_translation')}</span>
         </button>
         <button class="settings-tab-btn" data-tab="data">
-          ${ICONS.data}<span>Data & Reset</span>
+          ${ICONS.data}<span>${escapeHtml(t('settings_tab_data'))}</span>
         </button>
 
         <div class="settings-tabs-footer">
@@ -5762,16 +6077,16 @@ function renderSettingsPanel() {
       <div class="settings-panels">
         <div class="settings-panels-header">
           <h3>${t('settings_title')}</h3>
-          <button id="ytm-settings-close-btn" class="ytm-unified-close-btn size-32" title="Close"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button id="ytm-settings-close-btn" class="ytm-unified-close-btn size-32" title="${t('settings_close')}" aria-label="${t('settings_close')}"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor"><path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
 
         <div class="settings-scroll-area">
 
-          <div class="settings-panel active" id="panel-visuals">
+          <div class="settings-panel" id="panel-visuals">
             <div class="settings-section-title">${t('settings_sec_display')}</div>
             <div class="settings-group-card">
               <div class="setting-row">
-                <span class="setting-name">UI Language</span>
+                <span class="setting-name">${t('settings_ui_lang')}</span>
                 <div class="ytm-lang-group" id="ui-lang-group"></div>
               </div>
               <label class="setting-row toggle-label">
@@ -5788,7 +6103,7 @@ function renderSettingsPanel() {
               </label>
               <div class="setting-row stacked">
                 <div class="setting-row-top">
-                  <span class="setting-name">UIサイズ (UI Size)</span>
+                  <span class="setting-name">${t('settings_ui_scale')}</span>
                   <span class="setting-value-badge" id="ui-scale-val">${Math.round((config.uiScale || 1) * 100)}%</span>
                 </div>
                 <input type="range" id="ui-scale-slider" min="0.7" max="1.5" step="0.05" value="${config.uiScale || 1}">
@@ -5807,7 +6122,7 @@ function renderSettingsPanel() {
               </label>
               <div class="setting-row stacked">
                 <div class="setting-row-top">
-                  <span class="setting-name">背景の明るさ (Brightness)</span>
+                  <span class="setting-name">${t('settings_bg_brightness')}</span>
                   <span class="setting-value-badge" id="bright-val">${Math.round((config.bgBrightness || DEFAULT_BG_BRIGHTNESS) * 100)}%</span>
                 </div>
                 <input type="range" id="bright-slider" min="0.1" max="1.0" step="0.05" value="${config.bgBrightness || DEFAULT_BG_BRIGHTNESS}">
@@ -5818,7 +6133,7 @@ function renderSettingsPanel() {
             <div class="settings-group-card">
               <div class="setting-row stacked">
                 <div class="setting-row-top">
-                  <span class="setting-name">歌詞の太さ (Weight)</span>
+                  <span class="setting-name">${t('settings_lyric_weight')}</span>
                   <span class="setting-value-badge" id="weight-val">${config.lyricWeight || 800}</span>
                 </div>
                 <input type="range" id="weight-slider" min="100" max="900" step="100" value="${config.lyricWeight || 800}">
@@ -5836,12 +6151,15 @@ function renderSettingsPanel() {
                 <input type="checkbox" id="singer-colors-toggle">
               </label>
               <label class="setting-row toggle-label">
-                <span class="setting-name">歌詞の解説がある場合常に表示</span>
+                <span class="setting-name">${t('settings_meaning_always')}</span>
                 <input type="checkbox" id="meaning-always-toggle">
               </label>
             </div>
 
-            <div class="settings-section-title">${t('settings_sec_data_source')}</div>
+          </div>
+
+          <div class="settings-panel" id="panel-sources">
+            <div class="settings-section-title">${t('settings_sec_source_priority')}</div>
             <div class="settings-group-card">
               <div class="setting-row stacked">
                 <span class="setting-name">${t('settings_source_auto_title')}</span>
@@ -5852,18 +6170,24 @@ function renderSettingsPanel() {
                   <button class="ytm-lang-pill" data-value="wordsync">${t('settings_source_wordsync')}</button>
                 </div>
               </div>
+            </div>
+
+            <div class="settings-section-title">${t('settings_sec_source_list')}</div>
+            <div class="settings-group-card">
               <div class="setting-row stacked">
                 <span class="setting-name">${t('settings_extra_providers')}</span>
                 <span class="setting-desc">${t('settings_extra_providers_desc')}</span>
-                <div class="ytm-lang-group">
+                <div class="ytm-extra-providers-embed" id="extra-providers-embed"></div>
+                <div class="ytm-lang-group" id="extra-providers-fallback" hidden>
                   <button class="ytm-lang-pill" id="extra-providers-btn">${t('settings_extra_providers_open')}</button>
                 </div>
+                <span class="setting-desc" id="extra-providers-reload" hidden>${t('settings_extra_providers_reload')}</span>
               </div>
             </div>
           </div>
 
           <div class="settings-panel" id="panel-translation">
-            <div class="settings-section-title">Translation & Features</div>
+            <div class="settings-section-title">${t('settings_sec_translation')}</div>
             <div class="settings-group-card">
               <label class="setting-row toggle-label">
                 <span class="setting-name">${t('settings_trans')}</span>
@@ -5879,7 +6203,7 @@ function renderSettingsPanel() {
                <div class="setting-row stacked">
                   <span class="setting-name">${t('settings_main_lang')}</span>
                   <div class="ytm-lang-group" id="main-lang-group">
-                    <button class="ytm-lang-pill" data-value="original">Original</button>
+                    <button class="ytm-lang-pill" data-value="original">${t('settings_lang_original')}</button>
                     <button class="ytm-lang-pill" data-value="ja">日本語</button>
                     <button class="ytm-lang-pill" data-value="en">English</button>
                     <button class="ytm-lang-pill" data-value="ko">한국어</button>
@@ -5888,7 +6212,7 @@ function renderSettingsPanel() {
                <div class="setting-row stacked">
                   <span class="setting-name">${t('settings_sub_lang')}</span>
                   <div class="ytm-lang-group" id="sub-lang-group">
-                    <button class="ytm-lang-pill" data-value="original">Original</button>
+                    <button class="ytm-lang-pill" data-value="original">${t('settings_lang_original')}</button>
                     <button class="ytm-lang-pill" data-value="ja">日本語</button>
                     <button class="ytm-lang-pill" data-value="en">English</button>
                     <button class="ytm-lang-pill" data-value="ko">한국어</button>
@@ -5896,8 +6220,8 @@ function renderSettingsPanel() {
                   </div>
                </div>
                <div class="setting-row stacked">
-                 <span class="setting-name">DeepL API Key <span class="setting-tag">Optional</span></span>
-                 <input type="password" id="deepl-key-input" class="setting-input-text" placeholder="Paste your API key here" autocomplete="off">
+                 <span class="setting-name">DeepL API Key <span class="setting-tag">${t('settings_optional')}</span></span>
+                 <input type="password" id="deepl-key-input" class="setting-input-text" placeholder="${t('settings_deepl_placeholder')}" autocomplete="off">
                </div>
             </div>
 
@@ -5917,36 +6241,36 @@ function renderSettingsPanel() {
           </div>
 
           <div class="settings-panel" id="panel-data">
-            <div class="settings-section-title">Data Management</div>
+            <div class="settings-section-title">${t('settings_sec_data')}</div>
             <div class="settings-group-card">
               <div class="setting-row action-row">
                 <div class="setting-info">
-                  <span class="setting-name">この曲の歌詞データを削除</span>
-                  <span class="setting-desc">現在再生中の曲の歌詞キャッシュのみを削除します</span>
+                  <span class="setting-name">${t('settings_delete_current')}</span>
+                  <span class="setting-desc">${t('settings_delete_current_desc')}</span>
                 </div>
                 <button id="delete-current-cache-btn" class="settings-action-btn btn-danger" ${hasCurrentSong ? '' : 'disabled'}>
-                  ${ICONS.trash}<span>削除</span>
+                  ${ICONS.trash}<span>${t('settings_delete')}</span>
                 </button>
               </div>
               <div class="setting-row action-row">
                 <div class="setting-info">
-                  <span class="setting-name">すべての歌詞データを削除</span>
-                  <span class="setting-desc">保存されているすべての歌詞データを削除します（設定は保持されます）</span>
+                  <span class="setting-name">${t('settings_delete_all')}</span>
+                  <span class="setting-desc">${t('settings_delete_all_desc')}</span>
                 </div>
                 <button id="clear-all-lyrics-cache-btn" class="settings-action-btn btn-danger strong">
-                  ${ICONS.trash}<span>全削除</span>
+                  ${ICONS.trash}<span>${t('settings_delete_all_btn')}</span>
                 </button>
               </div>
             </div>
 
-            <div class="settings-section-title">Reset</div>
+            <div class="settings-section-title">${t('settings_sec_reset')}</div>
             <div class="settings-group-card">
               <div class="setting-row action-row">
                 <div class="setting-info">
-                  <span class="setting-name">設定をリセット (Reset All)</span>
-                  <span class="setting-desc">拡張機能のすべての設定を初期状態に戻します</span>
+                  <span class="setting-name">${t('settings_reset_all')}</span>
+                  <span class="setting-desc">${t('settings_reset_all_desc')}</span>
                 </div>
-                <button id="clear-all-btn" class="settings-action-btn btn-neutral">リセット</button>
+                <button id="clear-all-btn" class="settings-action-btn btn-neutral">${t('settings_reset')}</button>
               </div>
             </div>
 
@@ -5959,15 +6283,16 @@ function renderSettingsPanel() {
   const tabs = ui.settings.querySelectorAll('.settings-tab-btn');
   const panels = ui.settings.querySelectorAll('.settings-panel');
 
+  // 開き直しても、描き直しても、最後に見ていたタブのまま
+  const showTab = (tabId) => {
+    const target = ui.settings.querySelector(`#panel-${tabId}`) ? tabId : 'visuals';
+    settingsActiveTab = target;
+    tabs.forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === target));
+    panels.forEach(p => p.classList.toggle('active', p.id === `panel-${target}`));
+  };
+  showTab(settingsActiveTab);
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      panels.forEach(p => p.classList.remove('active'));
-
-      tab.classList.add('active');
-      const tabId = tab.getAttribute('data-tab');
-      ui.settings.querySelector(`#panel-${tabId}`).classList.add('active');
-    });
+    tab.addEventListener('click', () => showTab(tab.getAttribute('data-tab')));
   });
 
 
@@ -6037,30 +6362,35 @@ function renderSettingsPanel() {
   setupLangPills('lyric-source-group', config.lyricSourceMode || 'ytm', v => { config.lyricSourceMode = v; });
   refreshUiLangGroup();
 
-  // 閉じるボタン
+  if (draft) writeSettingsDraft(draft);
+
+  // 閉じるボタン(保存していない変更は捨てる)
   const closeBtn = document.getElementById('ytm-settings-close-btn');
   if (closeBtn) {
     closeBtn.onclick = (ev) => {
       ev.stopPropagation();
-      ui.settings.classList.remove('active');
+      closeSettings();
     };
   }
 
-  // 追加の歌詞サーバーの許可ページを開く。
-  //
-  // 通信先は optional_host_permissions なので、許可は
-  // chrome.permissions.request() で取る。あれはユーザー操作を起点に、
-  // かつ拡張のページからしか呼べない。ここは YouTube Music に差し込んだ
-  // content script なので呼べず、background に開いてもらう。
+  // 追加の歌詞サーバーの許可は、このパネルの中で切り替える。
+  // 差し込めなかった時だけ、従来どおり別タブの許可ページを開くボタンを出す。
+  mountExtraProvidersFrame();
   const extraProvidersBtn = document.getElementById('extra-providers-btn');
   if (extraProvidersBtn) {
     extraProvidersBtn.onclick = () => {
+      // ボタンを出したあとで切り離されることもある。送っても黙って失敗するだけ
+      if (!isExtensionContextAlive()) {
+        showExtraProvidersReloadNotice();
+        return;
+      }
       safeRuntimeSendMessage({ type: 'OPEN_EXTRA_PROVIDERS_SETUP' });
     };
   }
 
   // 保存ボタンの処理
   document.getElementById('save-settings-btn').onclick = async () => {
+    const session = settingsSession;
     const prevAlwaysShowMeaning = !!config.alwaysShowMeaning;
     const [
       savedDeepLKey,
@@ -6073,7 +6403,8 @@ function renderSettingsPanel() {
       savedLrcLibFallback,
       savedSourceMode,
       savedAppleSyncStyle,
-      savedLowCpuMode
+      savedLowCpuMode,
+      savedDisabledSources
     ] = await Promise.all([
       storage.get('ytm_deepl_key'),
       storage.get('ytm_main_lang'),
@@ -6085,7 +6416,8 @@ function renderSettingsPanel() {
       storage.get('ytm_lrclib_fallback'),
       storage.get('ytm_lyric_source_mode'),
       storage.get('ytm_apple_sync_style'),
-      storage.get('ytm_low_cpu_mode')
+      storage.get('ytm_low_cpu_mode'),
+      storage.get(DISABLED_LYRIC_SOURCES_KEY)
     ]);
 
     const prevDeepLKey = savedDeepLKey || '';
@@ -6099,6 +6431,13 @@ function renderSettingsPanel() {
     const prevSourceMode = normalizeSourceMode(savedSourceMode);
     const prevAppleSync = savedAppleSyncStyle !== null ? !!savedAppleSyncStyle : true;
     const prevLowCpu = savedLowCpuMode !== null ? !!savedLowCpuMode : false;
+    config.disabledLyricSources = normalizeDisabledLyricSources(savedDisabledSources);
+    // 取得元のオン・オフは差し込んだ許可ページの中でその場で保存される。
+    // 開いた時から変わっていれば今の曲を取り直す。
+    const disabledSourcesChanged = !!session && (
+      session.sourcesChanged ||
+      session.disabledSources !== disabledSourcesKey(config.disabledLyricSources)
+    );
 
     // 画面から値を取得
     config.deepLKey = document.getElementById('deepl-key-input').value.trim();
@@ -6175,13 +6514,14 @@ function renderSettingsPanel() {
     const wordSyncChanged = prevAppleSync !== config.appleSyncStyle ||
       prevLowCpu !== config.lowCpuMode;
     const lyricsSourceChanged = (
+      disabledSourcesChanged ||
       prevSourceMode !== config.lyricSourceMode ||
       prevUseLrcLibFallback !== config.useLrcLibFallback
     );
     const uiLanguageChanged = prevUiLang !== config.uiLang;
     const meaningAlwaysChanged = prevAlwaysShowMeaning !== config.alwaysShowMeaning;
 
-    ui.settings.classList.remove('active');
+    closeSettings({ saved: true });
 
     if (animatedCaptionsChanged || lyricsSourceChanged || wordSyncChanged) {
       const metaNow = getMetadata();
@@ -6211,6 +6551,8 @@ function renderSettingsPanel() {
     }
 
     if (uiLanguageChanged) {
+      applyButtonLabels();
+      applyLyricsSourceBadgeText();
       const replayWasActive = !!ui.replayPanel?.classList.contains('active');
       const replayRange = ui.replayPanel?.dataset?.range || 'day';
       if (ui.replayPanel) {
@@ -6238,7 +6580,7 @@ function renderSettingsPanel() {
   // しか書いていないのに、再生履歴も歌詞キャッシュもクラウドの復活の呪文も
   // 巻き添えで消えていた。消すのは設定のキーだけにする。
   document.getElementById('clear-all-btn').onclick = async () => {
-    if (!confirm('設定を初期状態に戻しますか？\n（再生履歴と保存済みの歌詞は残ります）')) return;
+    if (!confirm(t('settings_reset_confirm'))) return;
     await Promise.all(SETTINGS_STORAGE_KEYS.map(key => storage.remove(key)));
     location.reload();
   };
@@ -6247,14 +6589,14 @@ function renderSettingsPanel() {
   const clearLyricsBtn = document.getElementById('clear-all-lyrics-cache-btn');
   if (clearLyricsBtn) {
     clearLyricsBtn.onclick = async () => {
-      if (confirm('保存されているすべての歌詞データを削除しますか？\n（設定や再生履歴は保持されます）')) {
+      if (confirm(t('settings_delete_all_confirm'))) {
         if (!chrome?.storage?.local) return;
         chrome.storage.local.get(null, async (items) => {
           const keysToDelete = Object.keys(items).filter(k => k.includes('///'));
           if (keysToDelete.length > 0) {
             await new Promise(resolve => chrome.storage.local.remove(keysToDelete, resolve));
           }
-          showToast('すべての歌詞キャッシュを削除しました');
+          showToast(t('settings_deleted_all'));
           location.reload();
         });
       }
@@ -6266,7 +6608,7 @@ function renderSettingsPanel() {
   if (delBtn) {
     delBtn.onclick = async () => {
       if (!currentKey) return;
-      if (confirm('現在の曲の歌詞キャッシュを削除しますか？\n（歌詞データ、同期情報などがリセットされます）')) {
+      if (confirm(t('settings_delete_current_confirm'))) {
         await storage.remove(currentKey);
 
         lyricsData = [];
@@ -6283,7 +6625,7 @@ function renderSettingsPanel() {
         refreshCandidateMenu();
         refreshLockMenu();
 
-        showToast('歌詞キャッシュを削除しました');
+        showToast(t('settings_deleted_current'));
       }
     };
   }
@@ -6546,6 +6888,7 @@ function initLayout() {
     ui.artist = document.getElementById('ytm-custom-artist');
     ui.artwork = document.getElementById('ytm-artwork-container');
     ui.btnArea = document.getElementById('ytm-btn-area');
+    ui.appBtnArea = document.getElementById('ytm-app-btn-area');
     document.getElementById('ytm-meaning-btn')?.remove();
     ui.meaningBtn = null;
     ui.summaryBtn = document.getElementById('ytm-meaning-summary-btn');
@@ -6576,18 +6919,32 @@ function initLayout() {
   ui.btnArea = createEl('div', 'ytm-btn-area');
 
   const btns = [];
-  const lyricsBtnConfig = { txt: 'Lyrics', cls: 'lyrics-btn', click: () => { } };
+  // 歌詞メニュー(取得元の切り替え・ズレ直し・読み込み)。
+  // 以前は「Lyrics」「PIP」の 2 つだけが文字のボタンで、ほかの絵のボタンと
+  // 形も大きさも揃わず、英語のまま表示言語にも従わず、UI サイズを上げると
+  // 「Lyrics」だけが横に伸びて列がはみ出す一因になっていた。
+  // 名前はホバーの説明と読み上げに付く(applyButtonLabels)。取得元の表示
+  // (ボタン列の下)からも同じメニューが開くので、文字が無くても辿り着ける。
+  const lyricsBtnConfig = {
+    txt: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h10M4 11h10M4 15.5h5.5"/><path d="M19.5 7v9"/><circle cx="17.3" cy="16.4" r="2.2"/></svg>',
+    cls: 'icon-btn lyrics-btn',
+    label: 'btn_lyrics_menu',
+    click: () => { }
+  };
 
   //  PiPボタン
   const pipBtnConfig = {
-    txt: 'PIP',
+    txt: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><rect x="12" y="11.5" width="6.5" height="5" rx="1" fill="currentColor" stroke="none"/></svg>',
     cls: 'icon-btn',
+    label: 'btn_pip',
     click: () => PipManager.toggle()
   };
 
   const replayBtnConfig = {
     txt: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M5 9.2h3V19H5zM10.6 5h2.8v14h-2.8zm5.6 8H19v6h-2.8z"/></svg>',
     cls: 'icon-btn',
+    label: 'btn_replay',
+    group: 'app',
     click: () => {
       if (!ui.replayPanel) {
         createReplayPanel();
@@ -6601,26 +6958,47 @@ function initLayout() {
   const settingsBtnConfig = {
     txt: '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.06-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.73 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.06.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .43-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.49-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>',
     cls: 'icon-btn',
+    label: 'settings_title',
+    group: 'app',
     click: async () => {
-      initSettings();
-      refreshUiLangGroup();
-      ui.settings.classList.toggle('active');
+      if (ui.settings?.classList.contains('active')) closeSettings();
+      else await openSettings();
     }
   };
 
   const switchBtnConfig = {
     txt: '',
     cls: 'icon-btn ytm-switch-icon-btn',
+    label: 'btn_switch_version',
     click: (ev) => setupSwitchPanel(ev.currentTarget)
   };
 
+  // 歌詞カード(選んだ行を画像にする。本体は lyric-card.js)
+  const lyricCardBtnConfig = {
+    txt: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7.5 10.5h2.8v2.3c0 1.2-.7 2.1-1.9 2.4M13.7 10.5h2.8v2.3c0 1.2-.7 2.1-1.9 2.4"/></svg>',
+    cls: 'icon-btn ytm-lyric-card-btn',
+    label: 'btn_lyric_card',
+    click: () => { if (typeof LyricCard !== 'undefined') LyricCard.start(); }
+  };
+
   // ボタン配列に追加
-  btns.push(lyricsBtnConfig, pipBtnConfig, replayBtnConfig, switchBtnConfig, settingsBtnConfig);
+  // 前半は今の曲と歌詞に対する操作、後半(group: 'app')は曲に関係しない
+  // アプリ全体の操作(Daily Replay・設定)。以前は統計が歌詞カードと
+  // 別バージョンの間に挟まり、6 つが同じ重みで並んでいた。
+  // 後半は同じ列の末尾に区切って置く。画面の隅へ分ける案も実機で試したが、
+  // 上端は YTM の検索バー(ホバーで出る)、右端は Up Next を開く帯、
+  // 狭い画面と動画モードの隅は曲/動画の切り替えが使っていて、
+  // どこに置いてもホバーやクリックを取り合った。
+  btns.push(lyricsBtnConfig, pipBtnConfig, lyricCardBtnConfig, switchBtnConfig, replayBtnConfig, settingsBtnConfig);
+  ui.appBtnArea = createEl('div', 'ytm-app-btn-area');
+  ui.appBtnArea.setAttribute('role', 'group');
 
   btns.forEach(b => {
     const btn = createEl('button', '', `ytm-glass-btn ${b.cls || ''}`, b.txt);
     btn.onclick = b.click;
-    ui.btnArea.appendChild(btn);
+    // 絵だけのボタンは、何のボタンか分からず読み上げもされなかった
+    if (b.label) btn.dataset.ytmLabel = b.label;
+    (b.group === 'app' ? ui.appBtnArea : ui.btnArea).appendChild(btn);
     if (b === lyricsBtnConfig) {
       ui.lyricsBtn = btn;
       setupUploadMenu(btn);
@@ -6630,7 +7008,7 @@ function initLayout() {
       // Use the custom icon image
       try {
         const iconUrl = chrome.runtime.getURL('src/assets/icons/ArtistChange.png');
-        btn.innerHTML = `<img src="${iconUrl}" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;" alt="ArtistChange">`;
+        btn.innerHTML = `<img src="${iconUrl}" style="width:18px;height:18px;object-fit:contain;vertical-align:middle;" alt="">`;
       } catch (_) { btn.textContent = '🔄'; }
     }
     if (b === settingsBtnConfig) {
@@ -6638,6 +7016,8 @@ function initLayout() {
       ui.settingsBtn = btn;
     }
   });
+  ui.btnArea.appendChild(ui.appBtnArea);
+  applyButtonLabels();
 
   ui.input = createEl('input');
   ui.input.type = 'file';
@@ -6745,6 +7125,7 @@ async function loadLyrics(meta, options = {}) {
   applyAppleSyncClass();
   const sourceModeStored = await storage.get('ytm_lyric_source_mode');
   config.lyricSourceMode = normalizeSourceMode(sourceModeStored);
+  config.disabledLyricSources = normalizeDisabledLyricSources(await storage.get(DISABLED_LYRIC_SOURCES_KEY));
 
   const thisKey = `${meta.title}///${meta.artist}`;
   const requestVideoId = getCurrentVideoId() || '';
@@ -6921,7 +7302,8 @@ async function loadLyrics(meta, options = {}) {
       if (offerYtmCandidate(res)) refreshCandidateMenu();
     };
 
-    const ytmPromise = (window.YTMLyrics && video_id)
+    // 設定でオフにされていたら YTM には聞かない(候補メニューにも出さない)
+    const ytmPromise = (window.YTMLyrics && video_id && isLyricSourceOn('ytm'))
       ? window.YTMLyrics.fetch(video_id, {
         // YTM が時刻なしの歌詞しか持っていない曲では、別リリースに同期版が
         // あることがある。その探索は数秒かかるので待たずに先へ進み、
@@ -7311,10 +7693,211 @@ const shouldMergeLyricSegments = (word, nextWord) => {
   return false;
 };
 
+// ── 日本語の行は BudouX で文節に切る ─────────────────────────
+// 上の規則は語区切り(Intl.Segmenter)を繋ぎ直す方式で、語区切りが
+// 細かすぎる所を追いかけきれない。「何 / 度でも」「笑って / み / せた」
+// 「溶けて / しま / い / そう」のように、語の途中に切れ目が残っていた。
+// BudouX は文節の切れ目を直接当てにいくので、語の途中ではほぼ切らない。
+//
+// 使うのは仮名を含む行だけ。英語・中国語・韓国語の行は上の規則のまま
+// (ja モデルは日本語向けで、それ以外の行を良くする根拠が無い)。
+const LYRIC_KANA_RE = /[ぁ-ゖァ-ヺ]/;
+// 英字の塊。塊の中では切らない(従来と同じ)
+const LYRIC_LATIN_RE = /[A-Za-z0-9'’\-.,!?:;&]/;
+const LYRIC_SPACE_RE = /\s/;
+// 行頭に来てはいけない字。語ごとに inline-block なので CSS の
+// line-break: strict は効かず、ここで止めるしかない。
+const LYRIC_LOOSE_HEAD_RE = /[ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶーｰ゛゜々〆ゝゞヽヾ、。，．！？!?,.;:…‥・)）\]｝}」』】〕》〉”’〜～]/;
+const LYRIC_OPEN_BRACKET_RE = /[(（[［{｛「『【〔《〈“‘]/;
+// これより長い塊は、行幅を超えた時に語の途中で割れる。
+// BudouX の次点の位置で割っておく。
+const LYRIC_MAX_PHRASE = 10;
+// 「〜て」の後に続く補助動詞の書き出し
+const LYRIC_TE_AUX_RE = /^(?:ゆ[かきくけこっ]|い[かきくけこったてなるれ]|く[るれ]|き[たて]|しま[うっいわえお]|ちゃ|じゃ|み[たてるせ]|お[いくけ]|ほし|あげ|くれ|もら)/;
+
+// 切れ目の文字位置を昇順で返す。BudouX が使えない行は null。
+const budouxPhraseBoundaries = (text) => {
+  if (typeof BudouxJa === 'undefined' || !text || !LYRIC_KANA_RE.test(text)) return null;
+  let scores;
+  try {
+    scores = BudouxJa.scores(text);
+  } catch (e) {
+    return null;
+  }
+
+  const kindAt = (i) => {
+    const c = text[i];
+    if (LYRIC_SPACE_RE.test(c)) return 'space';
+    if (LYRIC_LATIN_RE.test(c)) return 'latin';
+    return 'cjk';
+  };
+  // 規則上どうしても切れない所
+  const forbidden = (i) => LYRIC_LOOSE_HEAD_RE.test(text[i])
+    || LYRIC_OPEN_BRACKET_RE.test(text[i - 1])
+    || kindAt(i) === 'space';
+
+  // BudouX は辞書を持たないので、「笑 / 顔」「唯一無 / 二」「生まれ / 変わり」の
+  // ように語の途中で切ることがある。語区切り(辞書あり)で1語とされた中で、
+  // 切れ目の左右どちらにも漢字かカタカナがある所は切らない。
+  // 仮名の側は語区切りを信じない。仮名が続く所では「いままでいる」の
+  // ような辞書に無い塊を作るし、「もう一度」は「もう / 一度」で切って良い。
+  // 「はいはい」「ないないない」のように同じ語が並ぶ所だけは、仮名でも
+  // 語区切りを信じる(BudouX は「はいは / い」と割る)。
+  const KANJI_KATA_RE = /[一-鿿々〆゠-ヿ]/;
+  const insideWord = new Set();
+  if (_jaWordSegmenter) {
+    try {
+      const segs = Array.from(_jaWordSegmenter.segment(text));
+      segs.forEach((seg, k) => {
+        const word = seg.segment;
+        const repeated = segs[k - 1]?.segment === word || segs[k + 1]?.segment === word;
+        for (let j = 1; j < word.length; j++) {
+          if (repeated || (KANJI_KATA_RE.test(word.slice(0, j)) && KANJI_KATA_RE.test(word.slice(j)))) {
+            insideWord.add(seg.index + j);
+          }
+        }
+      });
+    } catch (e) { /* 語区切りが使えなければ BudouX の切れ目をそのまま使う */ }
+  }
+  const isSegmenterEdge = (i) => !insideWord.has(i);
+
+  const cuts = new Set();
+  for (let i = 1; i < text.length; i++) {
+    if (forbidden(i)) continue;
+    const before = kindAt(i - 1);
+    const after = kindAt(i);
+    if (before === 'space') {
+      // 空白の手前が英字で、後ろも英字なら英字の塊の中。それ以外は切る
+      let j = i - 1;
+      while (j > 0 && kindAt(j) === 'space') j--;
+      if (kindAt(j) === 'latin' && after === 'latin') continue;
+      cuts.add(i);
+    } else if (before === 'latin') {
+      // 「face で」の「で」のように、英字の直後の仮名は前に付ける
+      continue;
+    } else if (after === 'latin' || LYRIC_OPEN_BRACKET_RE.test(text[i])) {
+      cuts.add(i);
+    } else if (scores[i] > 0 && isSegmenterEdge(i)) {
+      cuts.add(i);
+    }
+  }
+
+  // 「answer は」「face to face で」の助詞は英字の側に付ける
+  for (const cut of [...cuts]) {
+    let j = cut - 1;
+    if (kindAt(j) !== 'space') continue;
+    while (j > 0 && kindAt(j) === 'space') j--;
+    if (kindAt(j) !== 'latin') continue;
+    let next = cut + 1;
+    while (next < text.length && !cuts.has(next)) next++;
+    if (LYRIC_PHRASE_RULES.suffixes.has(text.slice(cut, next))) cuts.delete(cut);
+  }
+
+  // 「〜て」「〜で」の後の補助動詞(ゆく・いく・いた・しまう・みせる…)は
+  // 前に付ける。BudouX は て の直後で切りがちで、「落ちて / ゆく前に」
+  // 「溶けて / ゆくように」と一続きの動きが二行に割れていた。
+  for (const cut of [...cuts]) {
+    if (/[てで]/.test(text[cut - 1]) && LYRIC_TE_AUX_RE.test(text.slice(cut, cut + 3))) {
+      cuts.delete(cut);
+    }
+  }
+
+  // 1字だけの塊は、日本語ではほぼ誤り(「片 / 思いの」「一 / 人きりの」)。
+  // 次の塊が日本語で続くなら繋げる。
+  {
+    const sorted = [0, ...[...cuts].sort((a, b) => a - b)];
+    for (let k = 1; k < sorted.length; k++) {
+      const cut = sorted[k];
+      const head = sorted[k - 1];
+      if (cut - head !== 1 || kindAt(head) !== 'cjk') continue;
+      if (kindAt(cut) !== 'cjk' || LYRIC_OPEN_BRACKET_RE.test(text[cut])) continue;
+      cuts.delete(cut);
+    }
+    // 行末の1字は前へ(「君の / 姿」「した / 時」)
+    const last = Math.max(0, ...cuts);
+    if (last && text.length - last === 1 && kindAt(last) === 'cjk' && kindAt(last - 1) === 'cjk'
+      && !LYRIC_OPEN_BRACKET_RE.test(text[last - 1])) {
+      cuts.delete(last);
+    }
+  }
+
+  // 複合動詞(「差し / 伸べた」「振り / 払う」)。漢字+い段の2字の塊に
+  // 漢字が続く所は、BudouX がよく切るが、一語なので繋げる。
+  {
+    const sorted = [0, ...[...cuts].sort((a, b) => a - b)];
+    for (let k = 1; k < sorted.length; k++) {
+      const cut = sorted[k];
+      if (cut - sorted[k - 1] !== 2) continue;
+      if (/^[一-鿿][いきしちにひみりぎじびぴ]$/.test(text.slice(cut - 2, cut)) && /[一-鿿]/.test(text[cut])) {
+        cuts.delete(cut);
+      }
+    }
+  }
+
+  // 長すぎる塊を、両端2字より内側で割る。BudouX が切りたかった所か
+  // 語区切りでも切れ目になる所を優先し、その中で素点がいちばん高い所を
+  // 選ぶ。素点だけで選ぶと「ちょっと / だけ笑ってみせた」のように語の
+  // まとまりを外し、語区切りだけで選ぶと「やり / 直せたら」を拾う。
+  let wordEdges = null;
+  const isWordEdge = (j) => {
+    if (!wordEdges) {
+      wordEdges = new Set();
+      if (_jaWordSegmenter) {
+        const segments = Array.from(_jaWordSegmenter.segment(text), s => s.segment);
+        let offset = 0;
+        for (let k = 0; k < segments.length - 1; k++) {
+          offset += segments[k].length;
+          if (!shouldMergeLyricSegments(segments[k], segments[k + 1])) wordEdges.add(offset);
+        }
+      }
+    }
+    return wordEdges.has(j);
+  };
+  for (;;) {
+    const edges = [0, ...[...cuts].sort((a, b) => a - b), text.length];
+    let split = null;
+    for (let k = 0; k < edges.length - 1 && split === null; k++) {
+      const from = edges[k];
+      const to = edges[k + 1];
+      if (to - from <= LYRIC_MAX_PHRASE) continue;
+      let best = null;
+      let bestPreferred = null;
+      for (let j = from + 2; j <= to - 2; j++) {
+        if (forbidden(j) || kindAt(j - 1) !== 'cjk' || kindAt(j) !== 'cjk') continue;
+        if (best === null || scores[j] > scores[best]) best = j;
+        if (((scores[j] > 0 && isSegmenterEdge(j)) || isWordEdge(j)) && (bestPreferred === null || scores[j] > scores[bestPreferred])) {
+          bestPreferred = j;
+        }
+      }
+      split = bestPreferred ?? best;
+    }
+    if (split === null) break;
+    cuts.add(split);
+  }
+
+  return [...cuts].sort((a, b) => a - b);
+};
+
 // 同期ありの行は語ごとの span に分かれている。そのままだと語と語の
 // どこでも折り返せてしまい、「を」だけが行頭に落ちる。
 // 同じ規則でまとめて、まとまりの中では折り返させない。
 const groupLyricUnitsIntoPhrases = (units) => {
+  // 日本語の行は、行ぜんたいを BudouX で切った切れ目に沿ってまとめる。
+  // 同期なしの行(optimizeLineBreaks)と同じ切れ目になる。
+  // 語の途中に来た切れ目は使わない(語の span は割れない)。
+  const cuts = budouxPhraseBoundaries(units.map(u => u.text).join(''));
+  if (cuts) {
+    const cutSet = new Set(cuts);
+    const grouped = [];
+    let offset = 0;
+    for (const unit of units) {
+      if (!grouped.length || cutSet.has(offset)) grouped.push([]);
+      grouped[grouped.length - 1].push(unit);
+      offset += unit.text.length;
+    }
+    return grouped;
+  }
+
   const phrases = [];
   let current = null;
 
@@ -7336,6 +7919,18 @@ const groupLyricUnitsIntoPhrases = (units) => {
 
 const optimizeLineBreaks = (text) => {
   if (!text) return '';
+
+  const cuts = budouxPhraseBoundaries(text);
+  if (cuts) {
+    let html = '';
+    let from = 0;
+    for (const to of [...cuts, text.length]) {
+      const buffer = text.slice(from, to);
+      html += `<span class="lyric-phrase">${escapeHtml(buffer)}</span>`;
+      from = to;
+    }
+    return html;
+  }
 
   // 語区切りが使えない環境では、まとめずに1行を1つの span にする。
   // 折り返しの見た目は落ちるが、歌詞は出る。
@@ -7748,6 +8343,13 @@ const requestLyricScroll = (container, target, instant) => {
   if (written === undefined || Math.abs(container.scrollTop - written) > SCROLL_HANDOVER_PX) {
     container._scrollPos = container.scrollTop;
     container._scrollVel = 0;
+    // 引き継いだ位置を「自分が書いた位置」としても覚える。ここを古いまま
+    // にすると、次の stepLyricScroll が同じずれを見て「誰かが動かした」と
+    // 手を引き、印(_lastScrolledIndex)を戻す。次のフレームでまた頼み直して
+    // また手を引く、を曲の終わりまで繰り返し、手で歌詞をスクロールした後は
+    // 追従が二度と戻らなかった(実機で再現: 手を離して 3 秒後も scrollTop が
+    // 動かず、歌っている行は画面外のまま)。
+    container._scrollLastWritten = container.scrollTop;
   }
   container._scrollTarget = target;
 };
@@ -7803,6 +8405,46 @@ const stepLyricScrolls = (nowMs) => {
   stepLyricScroll(PipManager.pipLyricsContainer, dt);
 };
 
+// ── 広告の間 ────────────────────────────────────────────
+// 広告は同じ <video> で流れる。そのまま時刻を読むと、前の曲の歌詞が広告の
+// 再生位置に合わせて頭から流れ直す。以前は曲の切り替えが広告の直前で
+// 止まり、前の曲の題名・次の曲のアーティスト名・Loading... が並んでいた。
+// 広告の間は歌詞を塗らず、歌詞の場所に「広告のあとで戻る」とだけ出す。
+let _cachedMoviePlayer = null;
+let _adPlayingState = false;
+const isAdPlayingNow = () => {
+  let mp = _cachedMoviePlayer;
+  if (!mp || !mp.isConnected) mp = _cachedMoviePlayer = document.getElementById('movie_player');
+  return !!mp && (mp.classList.contains('ad-showing') || mp.classList.contains('ad-interrupting'));
+};
+const setAdPlayingState = (on) => {
+  on = !!on;
+  if (on === _adPlayingState) return;
+  _adPlayingState = on;
+  document.body.classList.toggle('ytm-ad-playing', on);
+  if (!on) return;
+  // 文字の動きは合成側の時計で走っているので、明示的に止める
+  pauseAllLyricWordMotion();
+  // 歌詞を隠すので、歌詞カードの行選びも閉じる
+  if (typeof LyricCard !== 'undefined') LyricCard.cancel();
+  if (!ui.lyricsStage) return;
+  let notice = ui.lyricsStage.querySelector('.ytm-ad-notice');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.className = 'ytm-ad-notice';
+    notice.setAttribute('role', 'status');
+    const label = document.createElement('div');
+    label.className = 'ytm-ad-notice-label';
+    const sub = document.createElement('div');
+    sub.className = 'ytm-ad-notice-sub';
+    notice.append(label, sub);
+    ui.lyricsStage.appendChild(notice);
+  }
+  // 表示言語は途中で変わり得るので、出すたびに入れ直す
+  notice.querySelector('.ytm-ad-notice-label').textContent = t('ad_notice_title');
+  notice.querySelector('.ytm-ad-notice-sub').textContent = t('ad_notice_sub');
+};
+
 function startLyricRafLoop() {
   if (isRafLoopRunning) return;
   isRafLoopRunning = true;
@@ -7814,6 +8456,16 @@ function startLyricRafLoop() {
   resetPlaybackClock();
 
   _lastScrollStepAt = 0;
+
+  const scheduleNextFrame = () => {
+    if (PipManager.pipWindow) {
+      lyricRafWindow = PipManager.pipWindow;
+      lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
+    } else {
+      lyricRafWindow = window;
+      lyricRafId = requestAnimationFrame(loop);
+    }
+  };
 
   const loop = () => {
     const v = _cachedVideoEl || (_cachedVideoEl = document.querySelector('video'));
@@ -7833,6 +8485,14 @@ function startLyricRafLoop() {
         _lastPlayingStateForBodyClass = isPlaying;
         document.body.classList.toggle('ytm-music-paused', !isPlaying);
       }
+
+      if (isPlaying && isAdPlayingNow()) {
+        // 広告の時刻で歌詞を塗らない。終われば次のフレームから元どおり。
+        setAdPlayingState(true);
+        scheduleNextFrame();
+        return;
+      }
+      if (_adPlayingState) setAdPlayingState(false);
 
       if (isPlaying) {
         _playbackRateForMotion = (Number.isFinite(v.playbackRate) && v.playbackRate > 0)
@@ -7875,13 +8535,7 @@ function startLyricRafLoop() {
         // PipManager.progressRing を更新する処理がここにあったが、
         // その要素はどこでも生成されていないので毎フレーム空振りしていた。
 
-        if (PipManager.pipWindow) {
-          lyricRafWindow = PipManager.pipWindow;
-          lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
-        } else {
-          lyricRafWindow = window;
-          lyricRafId = requestAnimationFrame(loop);
-        }
+        scheduleNextFrame();
       } else {
         // 止まっている間はループが回らない。中途半端な位置で残らないよう着地させる。
         snapLyricScroll(ui.lyrics);
@@ -7899,13 +8553,7 @@ function startLyricRafLoop() {
     }
   };
 
-  if (PipManager.pipWindow) {
-    lyricRafWindow = PipManager.pipWindow;
-    lyricRafId = PipManager.pipWindow.requestAnimationFrame(loop);
-  } else {
-    lyricRafWindow = window;
-    lyricRafId = requestAnimationFrame(loop);
-  }
+  scheduleNextFrame();
 }
 
 // 窓の大きさが変わったら、いまの行へ寄せ直す。
@@ -7969,6 +8617,17 @@ let isProgrammaticScrolling = false;
 let programmaticScrollTimeout = null;
 let programmaticScrollMaxTimeout = null;
 let _previousActiveIndices = new Set();
+// Daily Replay の「累計行数」に数えた最後の行。数えるのは行が進んだ時だけにする。
+// 以前はスクロールを頼むたびに数えていて、寄せ直し(手で動かした後・窓の
+// 大きさの変更・再描画)のたびに同じ行を数え直していた。
+let _lastCountedLyricIndex = -1;
+// 歌詞カードで行を選んでいる間は、歌っている行へ寄せない(選ぶ行が逃げる)。
+let _lyricsAutoFollowHold = false;
+function setLyricsAutoFollowHold(on) {
+  _lyricsAutoFollowHold = !!on;
+  // 放したら、いま歌っている行へ寄せ直す
+  if (!_lyricsAutoFollowHold && ui.lyrics) ui.lyrics._lastScrolledIndex = -1;
+}
 let _cachedVideoEl = null;
 let _slidersPatched = false;
 let _lastLikeCheckTime = 0;
@@ -8319,7 +8978,7 @@ function updateLyricHighlight(currentTime) {
           if (container === ui.lyrics) {
             // 見送る回で _instantNextScroll を消さない。消すと、次に動ける
             // ようになった時に 0 秒位置からゆっくり流れてしまう。
-            if (isUserScrolling) continue;
+            if (isUserScrolling || _lyricsAutoFollowHold) continue;
             container._instantNextScroll = false;
             // 【通常再生画面】
             // getBoundingClientRect を使って要素の絶対位置から確実なスクロール量を計算
@@ -8338,7 +8997,10 @@ function updateLyricHighlight(currentTime) {
             requestLyricScroll(container, targetScroll, scrollBehavior === 'auto');
 
             container._lastScrolledIndex = idx;
-            ReplayManager.incrementLyricCount();
+            if (idx !== _lastCountedLyricIndex) {
+              _lastCountedLyricIndex = idx;
+              ReplayManager.incrementLyricCount();
+            }
           } else {
             // 【PIP（小窓）】
             if (container._isUserScrolling) continue;
@@ -8410,7 +9072,58 @@ function setupPlayerBarBlankClickGuard() {
   }, true);
 }
 
+// ── 曲送り直後のメタデータの食い違い ─────────────────────────
+// 曲送りを 1 フレームずつ追うと(実機)、URL とプレイヤーバーの曲名が先に
+// 新しい曲になり、MediaSession(getMetadata が優先して読む)は 80ms 前後
+// 遅れて追いつく。その間に tick が走ると「新しい videoId + 前の曲の題名・
+// ジャケット」で曲の切り替えを 1 回やり、追いついた所でもう 1 回やって
+// いた。1 回目で前の曲のジャケットを読み直して空白になり、歌詞の取得も
+// 2 回目から数え直しになる。広告が挟まると 1 回目のまま止まり、前の曲の
+// 題名に次の曲のアーティスト名が並んでいた。
+// videoId が変わったのにプレイヤーバーと MediaSession の曲名が噛み合わない
+// 間は、切り替えを少し待つ。バー側は「（feat. …）」を付けることがあるので
+// 包含で見る。噛み合わないまま 1.5 秒たったら、従来どおり先へ進む。
+const META_SETTLE_MAX_MS = 1500;
+const LYRICS_LOAD_DEBOUNCE_MS = 250;
+const META_SETTLE_RETRY_MS = 90;
+let _metaSettleVideoId = '';
+let _metaSettleSince = 0;
+let _metaSettleTimer = null;
+const normalizeTitleForSettle = (value) => String(value || '')
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/\s+/g, '');
+const titlesAgree = (a, b) => {
+  const x = normalizeTitleForSettle(a);
+  const y = normalizeTitleForSettle(b);
+  if (!x || !y) return true; // 片方が読めない時は判断しない
+  return x.includes(y) || y.includes(x);
+};
+const shouldWaitForSettledMetadata = (meta, videoId) => {
+  if (!videoId || videoId === (currentLyricsVideoId || '')) {
+    _metaSettleVideoId = '';
+    return false;
+  }
+  const barTitle = document.querySelector('yt-formatted-string.title.style-scope.ytmusic-player-bar')?.textContent;
+  if (titlesAgree(barTitle, meta.title)) {
+    _metaSettleVideoId = '';
+    return false;
+  }
+  const now = performance.now();
+  if (_metaSettleVideoId !== videoId) {
+    _metaSettleVideoId = videoId;
+    _metaSettleSince = now;
+  }
+  if (now - _metaSettleSince >= META_SETTLE_MAX_MS) return false;
+  // MediaSession が追いついてもプレイヤーバーは動かないので、自分で見直す
+  clearTimeout(_metaSettleTimer);
+  _metaSettleTimer = setTimeout(() => requestImmersionTick(), META_SETTLE_RETRY_MS);
+  return true;
+};
+
 let _cachedLayoutEl = null;
+// 監視(setupObserver)が組まれたら、その予約関数に差し替わる。
+let requestImmersionTick = () => { void tick(); };
 
 const tick = async () => {
   // Update PIP window state (throttled to once per second)
@@ -8422,7 +9135,9 @@ const tick = async () => {
     }
   }
 
-  if (document.querySelector('.ad-interrupting, .ad-showing')) return;
+  const adPlaying = isAdPlayingNow() || !!document.querySelector('.ad-interrupting, .ad-showing');
+  setAdPlayingState(adPlaying);
+  if (adPlaying) return;
 
   let toggleBtn = document.getElementById('my-mode-toggle');
 
@@ -8439,6 +9154,10 @@ const tick = async () => {
         if (isYTMPremiumUser()) changeIModeUIWithMovieMode(config.mode);
 
         toggleBtn.classList.toggle('active', config.mode);
+        // 閉じている間に曲が変わっていたら、開いた瞬間に今の曲へ合わせる。
+        // このボタンは監視の対象外(#right-controls)なので、自分で頼まないと
+        // 次にプレイヤーバーが動くまで(たいてい次の曲まで)前の曲が出ていた。
+        requestImmersionTick();
       };
       rc.prepend(toggleBtn);
     }
@@ -8450,19 +9169,28 @@ const tick = async () => {
 
   const layout = _cachedLayoutEl || (_cachedLayoutEl = document.querySelector('ytmusic-app-layout'));
   const isPlayerOpen = layout?.hasAttribute('player-page-open');
-  if (!config.mode || !isPlayerOpen) {
+  const immersionShown = config.mode && isPlayerOpen;
+  // PiP は Immersion の外でも見え続ける。Immersion を閉じたりプレイヤーを
+  // 畳んだりした後も、曲の切り替わりと歌詞の取得だけはここで続ける。
+  // 以前はこの先へ進まなかったので、PiP に前の曲の題名と歌詞が残り、
+  // 前の曲の歌詞を新しい曲の再生位置で光らせていた。
+  // 器(ui.*)は PiP を開いた時点で組まれている。
+  const followForPip = !immersionShown && !!(PipManager && PipManager.pipWindow) && !!ui.lyrics;
+  if (!immersionShown) {
     document.body.classList.remove('ytm-custom-layout');
-    // Immersion を閉じている間は再生位置を追えていない。
-    // 次に開いた時、曲の切り替わりを見ていたことにしてはいけない。
-    _wasTrackingPlayback = false;
-    return;
+    if (typeof LyricCard !== 'undefined') LyricCard.cancel();
+    if (!followForPip) {
+      // Immersion を閉じている間は再生位置を追えていない。
+      // 次に開いた時、曲の切り替わりを見ていたことにしてはいけない。
+      _wasTrackingPlayback = false;
+      return;
+    }
+  } else {
+    document.body.classList.add('ytm-custom-layout');
+    initLayout();
+    setupPlayerBarBlankClickGuard();
   }
-  document.body.classList.add('ytm-custom-layout');
-  initLayout();
-
-
-  setupPlayerBarBlankClickGuard();
-  if (!_slidersPatched) {
+  if (immersionShown && !_slidersPatched) {
     const sliders = document.querySelectorAll('ytmusic-player-bar .middle-controls tp-yt-paper-slider');
     if (sliders.length > 0) {
       sliders.forEach(s => {
@@ -8480,6 +9208,7 @@ const tick = async () => {
 
   const meta = getMetadata();
   if (!meta) return;
+  if (shouldWaitForSettledMetadata(meta, getCurrentVideoId() || '')) return;
   // 「直前の tick でも追えていたか」を、フラグを更新する前に控える
   const wasTrackingBefore = _wasTrackingPlayback;
   _wasTrackingPlayback = true;
@@ -8538,6 +9267,8 @@ const tick = async () => {
 
     clearLyricsLateRetry();
 
+    // 歌詞カードで前の曲の行を選んでいたら、やめる
+    if (typeof LyricCard !== 'undefined') LyricCard.cancel();
     currentKey = key;
     currentLyricsVideoId = videoId;
     activeLyricsRequestId = null;
@@ -8569,6 +9300,7 @@ const tick = async () => {
     hideMeaningSummaryPopup();
     lastActiveIndex = -1;
     _previousActiveIndices.clear();
+    _lastCountedLyricIndex = -1;
     if (ui.lyrics) ui.lyrics._lastScrolledIndex = -1;
     if (PipManager && PipManager.pipLyricsContainer) {
       PipManager.pipLyricsContainer._lastScrolledIndex = -1;
@@ -8617,7 +9349,10 @@ const tick = async () => {
       if (keyNow !== key) return;
       loadLyrics(metaNow);
       startLyricRafLoop();
-    }, 800);
+      // 以前は 800ms 待っていた。メタデータの食い違いは上で待つようにしたので、
+      // ここは連打で途中の曲をいちいち取りに行かないための間だけでよい。
+      // 先読み済みの曲でも毎回 1.5 秒ほど歌詞が空になっていた(実機)。
+    }, LYRICS_LOAD_DEBOUNCE_MS);
   }
 };
 
@@ -8628,8 +9363,79 @@ const tick = async () => {
 // 「背景だけ前の曲のまま」になる。世代を持たせて古い分を捨てる。
 let _bgLoadToken = 0;
 
+// ── 明るいジャケットでも歌詞を読めるようにする ─────────────────
+// 背景はジャケットをぼかして一律に暗くしている(--ytm-bg-brightness)。
+// 一律なので、明るいジャケットほど背景が明るく残り、白い歌詞が沈む。
+// 実機で測った背景の輝度と、白文字とのコントラスト比:
+//   アイドル(暗い)   背景 0.026 → いまの行 13.8:1、次の行(不透明度 0.3) 4.8:1
+//   夜に駆ける(淡い桃) 背景 0.196 → いまの行 4.3:1、 次の行 2.0:1
+// ジャケットの平均輝度を測り、既定の明るさで背景がこの目安を超える時だけ
+// さらに暗くする。暗いジャケットは今までどおり。設定の明るさはこの上から
+// 掛かるので、利用者が明るくすればそのぶん明るくなる。
+const BG_TARGET_LUMINANCE = 0.07;
+const BG_MIN_ART_DIM = 0.45;
+const srgbChannelToLinear = (c) => {
+  const v = c / 255;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+};
+const measureArtworkLuminance = (ctx, size) => {
+  const data = ctx.getImageData(0, 0, size, size).data;
+  let sum = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    sum += 0.2126 * srgbChannelToLinear(data[i])
+      + 0.7152 * srgbChannelToLinear(data[i + 1])
+      + 0.0722 * srgbChannelToLinear(data[i + 2]);
+  }
+  return sum / (data.length / 4);
+};
+// brightness() は色の値(sRGB)に掛かるので、輝度では約 2.2 乗で効く。
+const artworkDimFor = (luminance) => {
+  if (!Number.isFinite(luminance) || luminance <= 0) return 1;
+  const expected = luminance * Math.pow(DEFAULT_BG_BRIGHTNESS, 2.2);
+  if (expected <= BG_TARGET_LUMINANCE) return 1;
+  return Math.max(BG_MIN_ART_DIM, Math.pow(BG_TARGET_LUMINANCE / expected, 1 / 2.2));
+};
+const applyArtworkDim = (luminance) => {
+  document.documentElement.style.setProperty('--ytm-bg-art-dim', artworkDimFor(luminance).toFixed(3));
+};
+const ARTWORK_SWAP_MAX_WAIT_MS = 1500;
+
+// ボタン列の名前(ホバーで出る説明と読み上げ用の名前)。表示言語を
+// 変えたら付け直す。
+function applyButtonLabels() {
+  if (!ui.btnArea) return;
+  ui.btnArea.querySelectorAll('[data-ytm-label]').forEach((btn) => {
+    const label = t(btn.dataset.ytmLabel);
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  });
+  if (ui.appBtnArea) ui.appBtnArea.setAttribute('aria-label', t('btn_group_app'));
+}
+
+// 曲名も歌詞と同じ切れ目で折り返す。「最後に階段を駆け上がったのは
+// いつだ？」のような長い曲名は、字の単位で折り返すと語の途中で2行目に
+// 落ちる。歌詞のような inline-block の塊にすると、狭い画面の1行表示で
+// 省略記号(…)が効かなくなるので、切ってよい所に <wbr> を置き、
+// それ以外は keep-all で折り返させない。1行表示では <wbr> は効かない。
+function setTitleText(el, title) {
+  const text = String(title ?? '');
+  const cuts = budouxPhraseBoundaries(text);
+  el.classList.toggle('ytm-title-phrased', !!cuts);
+  if (!cuts) {
+    el.textContent = text;
+    return;
+  }
+  el.textContent = '';
+  let from = 0;
+  for (const to of [...cuts, text.length]) {
+    if (from) el.appendChild(document.createElement('wbr'));
+    el.appendChild(document.createTextNode(text.slice(from, to)));
+    from = to;
+  }
+}
+
 function updateMetaUI(meta) {
-  ui.title.innerText = meta.title;
+  setTitleText(ui.title, meta.title);
   ui.artist.innerText = meta.artist;
 
   if (meta.src) {
@@ -8640,15 +9446,30 @@ function updateMetaUI(meta) {
       img.src = meta.src;
     } else {
       try {
+        // 目印は固定値にする。YTM 自身が CORS なしで読んだ同じ画像のキャッシュと
+        // 分けるための印なので、毎回変える必要は無い。毎回変えていたので、
+        // 同じ曲へ戻っても毎回取り直していた。
         const url = new URL(meta.src);
-        url.searchParams.set('ytm_cors', Date.now().toString());
+        url.searchParams.set('ytm_cors', '1');
         img.src = url.toString();
       } catch (e) {
-        img.src = meta.src + (meta.src.includes('?') ? '&' : '?') + 'ytm_cors=' + Date.now();
+        img.src = meta.src + (meta.src.includes('?') ? '&' : '?') + 'ytm_cors=1';
       }
     }
+    // 新しいジャケットが読み終わるまでは、前のジャケットを出したままにする。
+    // 先に差し替えると、読み込みの間(実機で 150〜570ms)ジャケットの枠が
+    // 空になり、曲送りのたびに点滅して見えていた。遅い回線でいつまでも前の
+    // 曲のジャケットを出し続けないよう、待つのは ARTWORK_SWAP_MAX_WAIT_MS まで。
+    let artworkPlaced = false;
+    const placeArtwork = () => {
+      if (artworkPlaced || bgToken !== _bgLoadToken) return;
+      artworkPlaced = true;
+      ui.artwork.replaceChildren(img);
+      if (ui.summaryBtn) ui.artwork.appendChild(ui.summaryBtn);
+    };
     img.onload = () => {
       if (bgToken !== _bgLoadToken) return;   // もう次の曲になっている
+      placeArtwork();
       try {
         const canvas = document.createElement('canvas');
         canvas.width = 64;
@@ -8658,24 +9479,32 @@ function updateMetaUI(meta) {
         ctx.drawImage(img, 0, 0, 64, 64);
         const blurredDataUrl = canvas.toDataURL();
         ui.bg.style.backgroundImage = `url(${blurredDataUrl})`;
+        applyArtworkDim(measureArtworkLuminance(ctx, 64));
       } catch (e) {
         console.warn("Failed to generate pre-blurred background via canvas:", e);
         ui.bg.style.backgroundImage = `url(${meta.src})`;
+        applyArtworkDim(null);
       }
     };
     img.onerror = () => {
       if (bgToken !== _bgLoadToken) return;
+      placeArtwork();
       ui.bg.style.backgroundImage = `url(${meta.src})`;
+      applyArtworkDim(null);
     };
-    ui.artwork.replaceChildren(img);
-    if (ui.summaryBtn) ui.artwork.appendChild(ui.summaryBtn);
+    if (!ui.artwork.querySelector('img')) placeArtwork();
+    else setTimeout(placeArtwork, ARTWORK_SWAP_MAX_WAIT_MS);
   }
   ui.lyrics.innerHTML = '<div class="lyric-loading" style="opacity:0.5; padding:20px;">Loading...</div>';
 
   // アーティストページのURLを取得
   let retryCount = 0;
   const maxRetries = 5;
+  const keyAtStart = currentKey;
   const trySetArtistLink = () => {
+    // 待っている間に次の曲へ進んでいたら、その曲の分は向こうに任せる。
+    // 続けると、新しい曲のアーティスト名を前の曲の題名の下に書いてしまう。
+    if (currentKey !== keyAtStart) return;
     const bylineWrapper = document.querySelector('ytmusic-player-bar yt-formatted-string.byline.complex-string');
     if (!bylineWrapper) {
       retryCount++;
@@ -8750,6 +9579,7 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   if (savedOffsetEnabled !== null) config.saveSyncOffset = !!savedOffsetEnabled;
   config.useLrcLibFallback = true;
   config.lyricSourceMode = normalizeSourceMode(savedSourceMode);
+  config.disabledLyricSources = normalizeDisabledLyricSources(await storage.get(DISABLED_LYRIC_SOURCES_KEY));
   if (savedAnimatedCaptions !== null) config.useAnimatedCaptions = !!savedAnimatedCaptions;
   if (savedAppleSync !== null) config.appleSyncStyle = !!savedAppleSync;
   if (savedSingerColors !== null) config.useSingerColors = !!savedSingerColors;
@@ -8829,6 +9659,42 @@ document.addEventListener('play', updateAmbientAnimationState, true);
 document.addEventListener('pause', updateAmbientAnimationState, true);
 updateAmbientAnimationState();
 
+// ── 背景のアニメーションは 1 秒に 10 回だけ進める ─────────────────
+// 背景(ジャケットをぼかしたもの)の漂いと回転は CSS アニメーションで、
+// そのままだと毎秒 60 回、画面全体が描き直しになる。隔離した Chrome で
+// この拡張のページが使う GPU 時間を測ると(macOS の GPU プロセスの累計)、
+// 再生中 226ms/秒のうち 94% がこれだった(背景を止めると 15ms/秒)。
+// 歌詞・ボタン・プレイヤーバーのぼかしも、背景が動くたびに全部描き直される。
+//
+// 背景はぼかしてあるので、1 フレームで変わる色はほとんど無い。実機で
+// 100ms ぶん進めた前後を撮って比べても、背景の差は 255 段階の最大 2 段
+// (大半は 1 段未満)で、見て分からない。そこで CSS では止めておき
+// (ytm-bg-stepped)、ここで 100ms ごとに同じアニメーションを進める。
+// 動きの形(イージング・往復)は CSS のキーフレームのまま変わらない。
+// 見えていない時と一時停止中(ytm-anim-idle)は進めない。
+const BG_ANIMATION_NAMES = new Set(['ytmBgDrift', 'amFluid1', 'amFluid2']);
+const BG_ANIMATION_STEP_MS = 100;
+let bgAnimationLastStep = 0;
+
+const stepBackgroundAnimations = () => {
+  const now = performance.now();
+  const elapsed = bgAnimationLastStep ? now - bgAnimationLastStep : BG_ANIMATION_STEP_MS;
+  bgAnimationLastStep = now;
+  const body = document.body;
+  if (!body.classList.contains('ytm-custom-layout') || body.classList.contains('ytm-anim-idle')) return;
+  // タブが裏に回ってタイマーが間引かれた後も、一度に大きく飛ばさない
+  const step = Math.min(elapsed, BG_ANIMATION_STEP_MS * 2);
+  for (const animation of document.getAnimations()) {
+    if (!BG_ANIMATION_NAMES.has(animation.animationName)) continue;
+    animation.currentTime = (Number(animation.currentTime) || 0) + step;
+  }
+};
+
+if (typeof document.getAnimations === 'function') {
+  document.body.classList.add('ytm-bg-stepped');
+  setInterval(stepBackgroundAnimations, BG_ANIMATION_STEP_MS);
+}
+
 ReplayManager.init();
 QueueManager.init();
 CloudSync.init();
@@ -8874,6 +9740,7 @@ const setupObserver = () => {
       document.hidden ? 0 : 250
     );
   };
+  requestImmersionTick = scheduleTick;
   const observer = new MutationObserver((mutations) => {
     // 既に次の tick を予約済みなら、中身を見る意味が無い。
     // 再生中はシークバーの属性変化が絶えず届くので、その回ぶんの

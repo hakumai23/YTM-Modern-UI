@@ -30,7 +30,7 @@ async function flushMicrotasks(iterations = 80) {
     await Promise.resolve()
 }
 
-function createBackgroundHarness({ api = {} } = {}) {
+function createBackgroundHarness({ api = {}, disabledSources = [] } = {}) {
   const messageListeners = []
   const responses = []
   const sentMessages = []
@@ -82,6 +82,8 @@ function createBackgroundHarness({ api = {} } = {}) {
       fetchFromKugou: async () => null,
       fetchFromLiriqo: async () => null,
     },
+    // lyric-sources.js。既定は「標準の取得元は全部オン」。
+    Sources: { loadDisabledSources: async () => new Set(disabledSources) },
     CloudSync: {
       CLOUD_STORAGE_KEY: 'test-cloud-state',
       DEFAULT_CLOUD_STATE: {},
@@ -360,4 +362,26 @@ test('normalized timed translations override raw Hub translation fields', async 
 
   assert.equal(harness.responses.length, 1)
   assert.equal(harness.responses[0].lrcMap.ja, '[00:12.00]normalized translation')
+})
+
+// 設定の「歌詞ソース」タブでオフにした標準の取得元は、どの経路からも叩かない
+test('オフにした LRCHub と LrcLib には問い合わせず、残りの取得元で歌詞を出す', async () => {
+  const called = []
+  const harness = createBackgroundHarness({
+    disabledSources: ['lrchub', 'lrclib'],
+    api: {
+      fetchFromLrchub: async () => { called.push('lrchub'); return { lyrics: '[00:01.00]hub' } },
+      fetchFromLrchubSearch: async () => { called.push('lrchub search'); return null },
+      fetchFromLrcLib: async () => { called.push('lrclib'); return { lyrics: '[00:01.00]lrclib' } },
+      fetchFromSimpMusic: async () => ({ lyrics: '[00:01.00]simp line' }),
+    },
+  })
+
+  harness.dispatch(requestPayload)
+  await flushMicrotasks(200)
+
+  assert.deepEqual(called, [])
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].lyricsSource, 'simpmusic')
+  assert.equal(harness.responses[0].lyrics, '[00:01.00]simp line')
 })

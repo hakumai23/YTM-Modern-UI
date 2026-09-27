@@ -53,7 +53,7 @@
   overflow: hidden;
 
   /* 繝�ヵ繧ｩ繝ｫ繝茨ｼ亥ｾ捺擂�峨�閭梧勹繧ｹ繧ｿ繧､繝ｫ: 蝓ｺ譛ｬ縺ｯ譏主ｺｦ繝ｻ蠖ｩ蠎ｦ縺ｮ隱ｿ謨ｴ縺ｮ縺ｿ縺ｧ縲；PU雋�闕ｷ縺ｮ髱槫ｸｸ縺ｫ螟ｧ縺阪＞CSS blur縺ｯ辟｡蜉ｹ蛹� (JS蛛ｴ縺ｧ莠句燕縺ｼ縺九＠蜃ｦ逅�ｒ螳滓命) */
-  filter: brightness(var(--ytm-bg-brightness, 0.65)) saturate(140%);
+  filter: brightness(calc(var(--ytm-bg-brightness, 0.65) * var(--ytm-bg-art-dim, 1))) saturate(140%);
   transform: scale(1.1);
   will-change: transform;
   animation: none;
@@ -61,7 +61,7 @@
 
 /* フォールバック用CSSブラー: キャンバスの事前処理がCORS等で動作しなかった場合のみ、従来のCSS blurを使用 */
 #ytm-custom-bg:not([style*="data:"]) {
-  filter: blur(80px) brightness(var(--ytm-bg-brightness, 0.65)) saturate(140%);
+  filter: blur(80px) brightness(calc(var(--ytm-bg-brightness, 0.65) * var(--ytm-bg-art-dim, 1))) saturate(140%);
   animation: none !important;
 }
 
@@ -72,14 +72,14 @@ body.ytm-custom-layout #ytm-custom-bg {
 
 body.ytm-apple-bg #ytm-custom-bg {
   /* 本来はCSS blurを非表示 */
-  filter: saturate(120%) brightness(var(--ytm-bg-brightness, 0.65));
+  filter: saturate(120%) brightness(calc(var(--ytm-bg-brightness, 0.65) * var(--ytm-bg-art-dim, 1)));
   transform: scale(1.2);
   animation: none;
 }
 
 /* フォールバック用CSSブラー: キャンバスの事前処理がCORS等で動作しなかった場合のみ、従来のCSS blurを使用 */
 body.ytm-apple-bg #ytm-custom-bg:not([style*="data:"]) {
-  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.65));
+  filter: blur(120px) saturate(120%) brightness(calc(var(--ytm-bg-brightness, 0.65) * var(--ytm-bg-art-dim, 1)));
   transform: scale(12);
   animation: none;
 }
@@ -203,10 +203,13 @@ body.ytm-apple-bg #ytm-custom-bg::after {
   align-items: center;
   /* 以前: gap 8vw / padding 左右 5vw → 解像度でアートワークと歌詞の間隔が変わっていた */
   gap: min(8vw, calc(90px * var(--ytm-ui-scale)));
+  /* 下はプレイヤーバー(bottom 40px + 高さ 80px × UI サイズ)の上に 20px 空ける。
+     以前は 140px × UI サイズで、100% の時だけ 20px になり、150% では 50px 空いて
+     低い画面の縦を無駄にしていた(100% の値は変わらない)。 */
   padding:
     calc(60px * var(--ytm-ui-scale))
     min(5vw, calc(60px * var(--ytm-ui-scale)))
-    calc(140px * var(--ytm-ui-scale))
+    calc(60px + 80px * var(--ytm-ui-scale))
     min(5vw, calc(60px * var(--ytm-ui-scale)));
   box-sizing: border-box;
   z-index: 1001;
@@ -233,6 +236,18 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-custom-wrapper {
 body.ytm-custom-layout.ytm-no-lyrics #ytm-custom-left-col {
   transform: scale(1.1);
   transition: transform 0.5s ease;
+}
+
+/* 歌詞が無い時は左カラムを 1.1 倍に広げるので、縦の上限もそのぶん詰める。
+   狭い画面(縦積み)は 64px の小さな絵なので触らない。 */
+@media (min-width: 901px) {
+  body.ytm-custom-layout.ytm-no-lyrics #ytm-artwork-container {
+    width: min(
+      calc(400px * var(--ytm-ui-scale)),
+      42vw,
+      max(calc(48px * var(--ytm-ui-scale)), calc(91vh - 190px - 270px * var(--ytm-ui-scale)))
+    );
+  }
 }
 
 body.ytm-custom-layout.ytm-no-lyrics #ytm-custom-left-col.moviemode {
@@ -421,8 +436,26 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 
 #ytm-artwork-container {
   position: relative;
-  /* 枠を広げてもアートワーク自体は従来サイズを保つ */
-  width: min(calc(400px * var(--ytm-ui-scale)), 42vw);
+  /* 枠を広げてもアートワーク自体は従来サイズを保つ。
+     幅だけでなく、縦に収まる大きさも上限にする。左カラムの縦の中身は
+     アートワーク + 余白 30px + 曲名・ボタン・取得元・曲/動画で約 240px、
+     器の上下の余白が 60px + 140px(プレイヤーバーの分)。幅だけ見ていた
+     ので、ノート PC の高さ(実機 1280×680)ではジャケットの上が画面から
+     切れ、取得元の表示と曲/動画の切り替えがプレイヤーバーの下に潜った。
+     813px でも曲/動画の切り替えがバーに 7px 食い込んでいた。
+     差し引く量は「UI サイズで伸びない分 + 伸びる分」。実機で測ると、絵以外の
+     縦の中身と上下の余白は 186px + 280px × UI サイズ(取得元の表示と曲/動画の
+     切り替えは UI サイズで伸びない)。14px のゆとりを足して、100% の時は従来と
+     同じ 480px になる。以前の 480px × UI サイズは 150% で伸びない分まで 1.5 倍に
+     していた。
+     下限も 160px × UI サイズから下げた。150% では下限だけで 240px あり、
+     1000×700 ではジャケットの上が画面から切れ、曲/動画の切り替えがバーの下に
+     完全に潜っていた(実機で確認)。 */
+  width: min(
+    calc(400px * var(--ytm-ui-scale)),
+    42vw,
+    max(calc(48px * var(--ytm-ui-scale)), calc(100vh - 200px - 280px * var(--ytm-ui-scale)))
+  );
   aspect-ratio: 1;
   border-radius: calc(16px * var(--ytm-ui-scale));
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
@@ -472,6 +505,15 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
   visibility: visible;
 }
 
+/* 日本語の曲名は文節の切れ目(<wbr>)でだけ折り返す。setTitleText を参照。
+   1語で1行を超える時だけ overflow-wrap が語の中で割る。
+   2行になった時は行の長さを揃える(1行目だけ長く2行目に数文字、を避ける)。 */
+#ytm-custom-title.ytm-title-phrased {
+  word-break: keep-all;
+  line-break: strict;
+  text-wrap: balance;
+}
+
 #ytm-custom-title.inactive.moviemode {
   opacity: 0;
   visibility: hidden;
@@ -497,7 +539,11 @@ body.ytm-custom-layout ytmusic-av-toggle[playback-mode=ATV_PREFERRED] .song-butt
 
 #ytm-btn-area {
   display: flex;
-  gap: calc(10px * var(--ytm-ui-scale));
+  /* 間隔は UI サイズで広げつつ画面の幅でも抑える。
+     左カラムの幅は画面の幅(52vw と等分)で決まるのに、ボタン列だけ UI サイズで
+     伸びていたので、1000px 幅・150% では列が 428px になり、370px の枠から左右に
+     約 30px はみ出していた(実機で確認)。1280px 幅・100% では従来と同じ値。 */
+  gap: min(calc(10px * var(--ytm-ui-scale)), 1.1vw);
   justify-content: center;
   margin-top: calc(24px * var(--ytm-ui-scale));
   max-height: calc(50px * var(--ytm-ui-scale));
@@ -535,6 +581,33 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
   position: fixed !important;
   top: 1vh;
   left: 1vw;
+}
+
+/* Daily Replay と設定(アプリ全体の操作)。今の曲に対する操作の後ろに、
+   細い縦線で区切って並べる(lyrics-ui.js のボタン配列を参照)。 */
+#ytm-app-btn-area {
+  display: flex;
+  align-items: center;
+  gap: inherit;
+}
+
+#ytm-app-btn-area::before {
+  content: '';
+  width: 1px;
+  height: calc(20px * var(--ytm-ui-scale));
+  margin-right: calc(2px * var(--ytm-ui-scale));
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* 歌詞カードは、歌詞が画面に無いと作れない。
+   動画モードは歌詞の列そのものが無いので出さない。
+   歌詞の無い曲は曲ごとに変わるので、列が伸び縮みしないよう薄くするだけにする。 */
+#ytm-btn-area.moviemode .ytm-lyric-card-btn {
+  display: none;
+}
+
+body.ytm-no-lyrics #ytm-btn-area .ytm-lyric-card-btn {
+  opacity: 0.4;
 }
 
 .ytm-glass-btn {
@@ -1285,6 +1358,34 @@ body.ytm-custom-layout div#ytm-custom-wrapper ytmusic-av-toggle.inactive.moviemo
 .setting-row.stacked .ytm-lang-pill {
   flex: 1 1 0;
   min-width: max-content;
+}
+
+/* 追加の歌詞サーバー: 許可ページ(options.html?embed=1)を差し込む枠。
+   高さは中身が postMessage で知らせてくる(lyrics-ui.js の
+   mountExtraProvidersFrame)。届くまでは 0 で、空の枠を見せない。
+   color-scheme は中のページ(options.html の html.embed)と揃える。
+   食い違うと Chrome が iframe の裏に不透明な背景を敷き、暗いパネルの中に
+   白い板が出る。 */
+.ytm-extra-providers-embed {
+  width: 100%;
+}
+
+.ytm-extra-providers-frame {
+  display: block;
+  width: 100%;
+  height: 0;
+  border: 0;
+  background: transparent;
+  color-scheme: dark;
+}
+
+/* 逃げ道のボタンと再読み込みの案内は、要る時だけ出す。
+   .setting-row.stacked .ytm-lang-group の display: flex や
+   .setting-desc の display: block が hidden 属性より強いので、ここで打ち消す。 */
+.ytm-extra-providers-embed[hidden],
+#extra-providers-fallback[hidden],
+#extra-providers-reload[hidden] {
+  display: none;
 }
 
 /* Daily Replay の期間切り替えも同じ理由で枠だけ伸びていた。
@@ -2696,6 +2797,12 @@ tp-yt-paper-listbox.ytmusic-menu-popup-renderer {
     text-overflow: ellipsis;
   }
 
+  /* 曲名の文節の切れ目に置いた <wbr> を消す。Chrome は nowrap の中でも
+     <wbr> で折り返すので、残すと省略されずに3行に伸びる(setTitleText 参照) */
+  body.ytm-custom-layout #ytm-custom-title wbr {
+    display: none;
+  }
+
   body.ytm-custom-layout #ytm-custom-title {
     grid-area: title;
     align-self: end;
@@ -3792,6 +3899,16 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
   cursor: w-resize;
 }
 
+/* Up Next は Immersion の中の機能。Immersion を切った時やプレイヤーを畳んだ時は
+   YTM 本来のキュー(次のコンテンツ)を使う。帯を残すと、右端 52px が見えない
+   まま YTM の上に乗り、畳んだプレイヤーバーの「プレイヤーを開く」ボタンが
+   押せず(実機で確認)、ホーム画面の上に Up Next が滑り出ていた。
+   固定した状態(pin)は残し、Immersion に戻れば元どおり出す。 */
+body:not(.ytm-custom-layout) #ytm-queue-trigger,
+body:not(.ytm-custom-layout) #ytm-queue-panel {
+  display: none !important;
+}
+
 
 #ytm-queue-panel {
   position: fixed;
@@ -3913,6 +4030,16 @@ body.ytm-win .queue-title {
 body.ytm-anim-idle #ytm-custom-bg,
 body.ytm-anim-idle #ytm-custom-bg::before,
 body.ytm-anim-idle #ytm-custom-bg::after {
+  animation-play-state: paused !important;
+}
+
+/* 背景のアニメーションは CSS では止めておき、JS が 100ms ごとに進める
+   (lyrics-ui.js の stepBackgroundAnimations)。毎秒 60 回の全画面の描き直しが
+   GPU 時間の 9 割以上を占めていた。背景はぼかしてあるので、10 回に減らしても
+   見た目の差は 255 段階で最大 2 段(実測)。JS が動かない時は背景が止まるだけ。 */
+body.ytm-bg-stepped #ytm-custom-bg,
+body.ytm-bg-stepped #ytm-custom-bg::before,
+body.ytm-bg-stepped #ytm-custom-bg::after {
   animation-play-state: paused !important;
 }
 
@@ -4497,6 +4624,17 @@ body.ytm-align-left #ytm-btn-area {
   justify-content: flex-start;
 }
 
+/* 取得元の表示はボタン列の真下で中央寄せ(margin auto / align-self center)に
+   なっていて、左寄せのモードでも 1 つだけ真ん中に残っていた。
+   狭い画面では画面の隅に固定されるので、広い画面だけ。 */
+@media (min-width: 901px) {
+  body.ytm-align-left #ytm-lyrics-source-debug.ytm-source-inline {
+    margin-left: 0;
+    margin-right: auto;
+    align-self: flex-start;
+  }
+}
+
 /* 再生停止時に背景アニメーションを一時停止してGPU負荷を下げる */
 body.ytm-music-paused #ytm-custom-bg,
 body.ytm-music-paused #ytm-custom-bg::before,
@@ -4524,7 +4662,7 @@ body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg {
    入っている場合のみ CSS blur を使う。この場合はアニメーションを止めて
    ブラーの再計算が毎フレーム走らないようにする。 */
 body.ytm-custom-layout.ytm-apple-bg:not(.ytm-lightweight-mode) #ytm-custom-bg:not([style*="data:"]) {
-  filter: blur(120px) saturate(120%) brightness(var(--ytm-bg-brightness, 0.65)) !important;
+  filter: blur(120px) saturate(120%) brightness(calc(var(--ytm-bg-brightness, 0.65) * var(--ytm-bg-art-dim, 1))) !important;
   transform: scale(12) !important;
   animation: none !important;
 }
@@ -4654,7 +4792,7 @@ body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-queue-panel {
 /* ===================== Fallback / Optimization (Lightweight Mode Only) ===================== */
 body.ytm-custom-layout.ytm-lightweight-mode #ytm-custom-bg {
   animation: none !important;
-  filter: brightness(var(--ytm-bg-brightness, 0.65)) saturate(100%) !important;
+  filter: brightness(calc(var(--ytm-bg-brightness, 0.65) * var(--ytm-bg-art-dim, 1))) saturate(100%) !important;
   transform: scale(1.1) !important;
 }
 
@@ -4847,5 +4985,156 @@ body.ytm-custom-layout.ytm-lightweight-mode .ytm-glass-btn {
   .lyric-source-warning:focus .lyric-source-warning-popover,
   .lyric-source-warning:focus-within .lyric-source-warning-popover {
     transform: translateY(0);
+  }
+}
+
+/* ── 広告の間 ─────────────────────────────────────────
+   広告は同じ <video> で流れるので、歌詞をそのまま出すと前の曲の歌詞が
+   広告の再生位置で頭から流れ直す。歌詞は隠し、同じ場所に
+   「広告のあとで戻る」とだけ静かに出す(lyrics-ui.js の setAdPlayingState)。 */
+.ytm-ad-notice {
+  display: none;
+}
+
+body.ytm-custom-layout.ytm-ad-playing #my-lyrics-container {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+body.ytm-custom-layout.ytm-ad-playing .ytm-ad-notice {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(10px * var(--ytm-ui-scale, 1));
+  text-align: center;
+  pointer-events: none;
+  animation: ytm-ad-notice-in 0.4s ease both;
+}
+
+.ytm-ad-notice-label {
+  padding: calc(5px * var(--ytm-ui-scale, 1)) calc(12px * var(--ytm-ui-scale, 1));
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: calc(13px * var(--ytm-ui-scale, 1));
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.ytm-ad-notice-sub {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: calc(15px * var(--ytm-ui-scale, 1));
+}
+
+@keyframes ytm-ad-notice-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── 歌詞カード: 行を選ぶ状態(lyric-card.js) ─────────────────
+   選んでいる間は、歌い終わった行も見せて押せるようにする。選んだ行は
+   行の外側に広げた影で囲む(余白を足すと折り返しが変わるので足さない)。 */
+body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line {
+  cursor: pointer;
+}
+
+body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line.lyric-past {
+  opacity: 0.35;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.2s ease, visibility 0s;
+}
+
+body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line:hover {
+  border-radius: calc(8px * var(--ytm-ui-scale, 1));
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 0 calc(12px * var(--ytm-ui-scale, 1)) rgba(255, 255, 255, 0.05);
+}
+
+body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line.ytm-card-selected {
+  opacity: 1;
+  visibility: visible;
+  border-radius: calc(8px * var(--ytm-ui-scale, 1));
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 calc(12px * var(--ytm-ui-scale, 1)) rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.ytm-lyric-card-bar {
+  position: absolute;
+  left: 50%;
+  bottom: calc(-12px * var(--ytm-ui-scale, 1));
+  z-index: 1003;
+  display: flex;
+  align-items: center;
+  gap: calc(12px * var(--ytm-ui-scale, 1));
+  width: max-content;
+  max-width: min(calc(100vw - 32px), 100%);
+  padding: calc(8px * var(--ytm-ui-scale, 1)) calc(8px * var(--ytm-ui-scale, 1)) calc(8px * var(--ytm-ui-scale, 1)) calc(18px * var(--ytm-ui-scale, 1));
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(20, 20, 24, 0.84);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: calc(13px * var(--ytm-ui-scale, 1));
+  transform: translateX(-50%);
+  animation: ytm-card-bar-in 0.25s ease both;
+}
+
+.ytm-card-bar-count {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.ytm-card-bar-hint {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.62);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ytm-lyric-card-bar button {
+  flex: none;
+  padding: calc(7px * var(--ytm-ui-scale, 1)) calc(14px * var(--ytm-ui-scale, 1));
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ytm-card-bar-make {
+  background: #fff;
+  color: #111;
+}
+
+.ytm-card-bar-make:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ytm-card-bar-cancel {
+  background: transparent;
+  color: #fff;
+}
+
+.ytm-lyric-card-bar button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+@keyframes ytm-card-bar-in {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@media (max-width: 900px) {
+  .ytm-card-bar-hint {
+    display: none;
   }
 }

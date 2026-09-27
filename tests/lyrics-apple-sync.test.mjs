@@ -833,6 +833,8 @@ function createBackgroundHarness({ api = {} } = {}) {
       fetchFromKugou: async () => null,
       fetchFromLiriqo: async () => null,
     },
+    // lyric-sources.js。既定は「標準の取得元は全部オン」。
+    Sources: { loadDisabledSources: async () => new Set() },
     CloudSync: { CLOUD_STORAGE_KEY: 'k', DEFAULT_CLOUD_STATE: {} },
     chrome: {
       runtime: { lastError: null, onInstalled: { addListener() {} }, onMessage: { addListener(l) { messageListeners.push(l) } } },

@@ -1,6 +1,7 @@
 import * as CloudSync from './module/bg-cloud-sync.js';
 import * as API from './module/api.js';
 import * as Extra from './module/extra-providers.js';
+import * as Sources from './module/lyric-sources.js';
 
 // ── デバッグログ ────────────────────────────────────────────
 // Service Worker には localStorage が無いので chrome.storage を見る。
@@ -92,6 +93,7 @@ const PROVIDER_CANDIDATE_LABELS = {
   netease: 'NetEase',
   kugou: 'KuGou',
   liriqo: 'LiriQo',
+  buaaa: 'BuaaaBot',
 };
 
 // 取得元1つぶんを候補メニューの1項目に均す。
@@ -169,7 +171,9 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   // chrome.permissions.request() で取る。あれはユーザー操作を起点に、
   // かつ拡張のページからしか呼べない。設定 UI は content script として
   // YouTube Music のページに差し込んでいるので、そこからは呼べない。
-  // ページ側の「追加の歌詞サーバー」からこれを投げてもらう。
+  // ふだんは設定パネルが許可ページを iframe で差し込んで、その中で許可を
+  // 取る(lyrics-ui.js の mountExtraProvidersFrame)。これは差し込みが
+  // 読み込めなかった時の逃げ道で、パネルのボタンから投げてもらう。
   if (req.type === 'OPEN_EXTRA_PROVIDERS_SETUP') {
     try {
       chrome.runtime.openOptionsPage(() => {
@@ -322,6 +326,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         artist: artist || '',
         video_id: resolvedVideoId || null,
       };
+
+      // 設定の「歌詞ソース」タブでオフにされた標準の取得元は叩かない。
+      // 追加の取得元は許可の有無がそのまま入切なので、ここでは見ない。
+      const disabledSources = await Sources.loadDisabledSources();
+      const sourceOn = (providerId) => !disabledSources.has(providerId);
+      const lrchubOn = sourceOn('lrchub');
 
       const getHubLyricsQuality = (hubRes) => {
         const animated = hubRes?.animated_lyrics || hubRes?.timedtext || hubRes?.timed_text;
@@ -531,20 +541,22 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
       // Keep the raw promise as well as the timeout-limited selection promise.
       // The raw promise can still upgrade a temporary LrcLib result later.
-      const primaryRawTask = makeRawHubTask(
-        'LRCHub',
-        API.fetchFromLrchub({
-          track,
-          artist,
-          youtube_url,
-          video_id: resolvedVideoId,
-          offset_ms,
-          translate_to,
-          translation_source,
-          method: lrchubLyricsMethod,
-        }),
-        'LRCHub'
-      );
+      const primaryRawTask = lrchubOn
+        ? makeRawHubTask(
+          'LRCHub',
+          API.fetchFromLrchub({
+            track,
+            artist,
+            youtube_url,
+            video_id: resolvedVideoId,
+            offset_ms,
+            translate_to,
+            translation_source,
+            method: lrchubLyricsMethod,
+          }),
+          'LRCHub'
+        )
+        : Promise.resolve(null);
       const primarySelectionTask = API.withTimeout(primaryRawTask, 8000, 'lrchub')
         .catch(e => {
           console.warn('[BG] LRCHub selection timed out:', e);
@@ -559,7 +571,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       // LrcLib は公開 API で、無料枠の共用サーバー(SimpMusic / LyricsPlus)を
       // 気遣う理由もないため、常時並走させてよい。
       let lrcLibSettled = null;
-      const lrcLibTask = use_lrclib
+      const lrcLibTask = (use_lrclib && sourceOn('lrclib'))
         ? API.withTimeout(API.fetchFromLrcLib(track, artist, duration_sec), 8000, 'lrclib')
           // 他の取得元と同じ関門を通す(別の曲のデータをここでも弾く)
           .then(res => asHubResult('LrcLib', res, 'lrclib'))
@@ -589,7 +601,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       // 検索をミラー横断で投げる重い経路で、実測でも3ミラーとも歌詞を
       // 返さない(502 / 429 / 402)。毎曲叩いても得るものが無い。
       let simpMusicSettled = null;
-      const simpMusicRawTask = (typeof API.fetchFromSimpMusic === 'function' && resolvedVideoId)
+      const simpMusicRawTask = (sourceOn('simpmusic') && typeof API.fetchFromSimpMusic === 'function' && resolvedVideoId)
         ? makeRawHubTask(
           'SimpMusic',
           API.fetchFromSimpMusic({ video_id: resolvedVideoId }),
@@ -609,8 +621,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       //   AMLL       : GitHub の静的ファイル。落ちない・速い・質が最上
       //   NetEase    : yrc(単語)があれば単語、無ければ行同期
       //   KuGou      : krc(単語)。中国系カタログと日本語曲に強い
-      // 後ろ3つは「曲名で検索して1件選ぶ」経路なので、extra-providers 側で
-      // 曲名・アーティスト・長さに点数を付けて確からしいものだけ返している。
+      //   BuaaaBot   : 独自に起こした単語同期。日本語曲が中心で収録は少ない。
+      //                videoId でも引け、カバー動画はカバーの時刻で返る
+      // AMLL / NetEase / KuGou は「曲名で検索して1件選ぶ」経路なので、
+      // extra-providers 側で曲名・アーティスト・長さに点数を付けて
+      // 確からしいものだけ返している。BuaaaBot も videoId で外れた時は
+      // 曲名検索になるので、同じように突き合わせてから返す。
       //
       // 起こすのを遅らせているのは、LRCHub が答えられる大半の曲で
       // よそのサーバーを無駄に叩かないため。ふだんは下のフォールバック段で
@@ -630,7 +646,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       const startRichProviders = () => {
         if (richProviders) return richProviders;
         const raw = [
-          (typeof API.fetchFromLyricsPlus === 'function')
+          (sourceOn('lyricsplus') && typeof API.fetchFromLyricsPlus === 'function')
             ? makeRawHubTask(
               'LyricsPlus',
               API.fetchFromLyricsPlus({ track, artist, album, duration: duration_sec }),
@@ -641,9 +657,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           extraTask(Extra.fetchFromAmll, 'AMLL', 'amll'),
           extraTask(Extra.fetchFromNetease, 'NetEase', 'netease'),
           extraTask(Extra.fetchFromKugou, 'KuGou', 'kugou'),
+          extraTask(Extra.fetchFromBuaaa, 'BuaaaBot', 'buaaa'),
         ];
-        const limits = [8000, 6000, 7000, 7000];
-        const labels = ['lyricsplus', 'amll', 'netease', 'kugou'];
+        const limits = [8000, 6000, 7000, 7000, 6000];
+        const labels = ['lyricsplus', 'amll', 'netease', 'kugou', 'buaaa'];
         richProviders = {
           raw,
           selections: raw.map((task, i) => withLimit(task, limits[i], labels[i])),
@@ -720,16 +737,19 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         }
       }
 
-      const searchRawTask = makeRawHubTask(
-        'LRCHub search',
-        API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to, video_id: resolvedVideoId }),
-        'LRCHub search'
-      );
+      const searchRawTask = lrchubOn
+        ? makeRawHubTask(
+          'LRCHub search',
+          API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to, video_id: resolvedVideoId }),
+          'LRCHub search'
+        )
+        : null;
       // 引き直しは primary が答えられなかった時だけ。
       // 以前は同じパラメータの2本を必ず同時に投げていたので、LRCHub が
       // 素直に答えた曲でも1曲あたり常に2往復していた。
       let retryStarted = null;
       const startRetry = () => {
+        if (!lrchubOn) return null;
         if (!retryStarted) {
           retryStarted = makeRawHubTask(
             'LRCHub retry',
@@ -751,10 +771,12 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       // 関門は primarySelectionTask(8秒で必ず決着する)側に置く。生の
       // primaryRawTask を待つと、LRCHub が黙り込んだ時に引き直しも
       // それを待つ形になり、下の allSettled がいつまでも返らない。
-      const searchSelectionTask = API.withTimeout(searchRawTask, 5000, 'lrchub search').catch(() => null);
+      const searchSelectionTask = searchRawTask
+        ? API.withTimeout(searchRawTask, 5000, 'lrchub search').catch(() => null)
+        : null;
       const retryRawTask = primarySelectionTask.then(result => (result ? null : startRetry()));
       const retrySelectionTask = primarySelectionTask.then(result => (
-        result ? null : API.withTimeout(startRetry(), 5000, 'lrchub retry').catch(() => null)
+        (result || !lrchubOn) ? null : API.withTimeout(startRetry(), 5000, 'lrchub retry').catch(() => null)
       ));
       const hubSelectionTask = firstValidResult([
         primarySelectionTask,
@@ -919,6 +941,9 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     );
 
     (async () => {
+      // 設定でオフにされた標準の取得元は、ここでも聞かない
+      for (const providerId of await Sources.loadDisabledSources()) skip.add(providerId);
+
       const tasks = [];
       const collect = (providerId, makePromise, label) => {
         if (skip.has(providerId)) return;
@@ -981,6 +1006,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           ['amll', Extra.fetchFromAmll, 'AMLL', 8000],
           ['netease', Extra.fetchFromNetease, 'NetEase', 8000],
           ['kugou', Extra.fetchFromKugou, 'KuGou', 8000],
+          ['buaaa', Extra.fetchFromBuaaa, 'BuaaaBot', 8000],
           ['liriqo', Extra.fetchFromLiriqo, 'LiriQo', 15000],
         ];
         for (const [providerId, fn, label, timeout] of extras) {

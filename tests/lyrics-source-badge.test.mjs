@@ -33,7 +33,12 @@ const end = uiSource.indexOf('function updateLyricsSourceState(payload')
 assert.ok(start !== -1 && end !== -1, '切り出しの目印が変わっていないか確認')
 const fnSource = uiSource.slice(start, end)
 
-const run = ({ debugEnabled, source = 'lrclib' }) => {
+const TEXTS = {
+  ja: { lyrics_source_prefix: '歌詞ソース', lyrics_source_hint: '歌詞の取得元を切り替える / ズレを直す', lyrics_quality_line: '行同期' },
+  en: { lyrics_source_prefix: 'Lyrics source', lyrics_source_hint: 'Switch the lyrics source / fix the timing', lyrics_quality_line: 'Line sync' },
+}
+
+const run = ({ debugEnabled, source = 'lrclib', lang = 'ja' }) => {
   let present = true
   let logged = 0
   let opened = 0
@@ -41,6 +46,7 @@ const run = ({ debugEnabled, source = 'lrclib' }) => {
   const el = {
     textContent: '',
     title: '',
+    dataset: {},
     classList: {
       toggle(name, on) { on ? classes.add(name) : classes.delete(name) },
       contains(name) { return classes.has(name) },
@@ -57,11 +63,13 @@ const run = ({ debugEnabled, source = 'lrclib' }) => {
     createEl: () => el,
     toggleLyricsMenu: () => { opened += 1 },
     LYRICS_SOURCE_LABELS: { lrclib: 'LRCLIB' },
-    LYRICS_QUALITY_LABELS: ['', '時刻なし', '行同期'],
+    LYRICS_QUALITY_LABEL_KEYS: ['', 'lyrics_quality_none', 'lyrics_quality_line'],
+    t: (key) => TEXTS[context.lang][key] ?? key,
+    lang,
     document: { body: {}, getElementById: () => (present ? el : null) },
   }
-  vm.runInNewContext(`${fnSource}\nupdateLyricsSourceDebugBadge({});`, context)
-  return { present, logged, opened, classes: [...classes], text: el.textContent }
+  vm.runInNewContext(`${fnSource}\nupdateLyricsSourceDebugBadge({});\nthis.reapply = applyLyricsSourceBadgeText;`, context)
+  return { present, logged, opened, classes: [...classes], text: el.textContent, el, context }
 }
 
 test('取得元が分かればバッジを用意する', () => {
@@ -69,6 +77,25 @@ test('取得元が分かればバッジを用意する', () => {
   const r = run({ debugEnabled: false })
   assert.equal(r.present, true)
   assert.match(r.text, /LRCLIB/)
+})
+
+// 以前は「歌詞ソース:」と同期の粒度が日本語で固定だった
+test('文言は表示言語に合わせる', () => {
+  assert.equal(run({ debugEnabled: false }).text, '歌詞ソース: LRCLIB / 行同期')
+  const en = run({ debugEnabled: false, lang: 'en' })
+  assert.equal(en.text, 'Lyrics source: LRCLIB / Line sync')
+  assert.equal(en.el.title, 'Switch the lyrics source / fix the timing')
+})
+
+test('表示言語を保存したら、取得元を取り直さなくても付け直す', () => {
+  const r = run({ debugEnabled: false })
+  r.context.lang = 'en'
+  r.context.reapply()
+  assert.equal(r.el.textContent, 'Lyrics source: LRCLIB / Line sync')
+  assert.match(uiSource, /if \(uiLanguageChanged\) \{\s*applyButtonLabels\(\);\s*applyLyricsSourceBadgeText\(\);/)
+  // 画面に出す文言(textContent / title)に日本語を固定で書いていない。
+  // コンソールへの記録([CS] 歌詞ソース:)は開発者向けなのでそのまま
+  assert.doesNotMatch(fnSource, /(?:textContent|title) = [`'][^`']*[\u3040-\u30ff]/, '日本語が固定で残っている')
 })
 
 test('取得元が分からなければ置かない', () => {
@@ -240,4 +267,17 @@ test('極端な値で止める', () => {
 test('表示の見た目が CSS にある', () => {
   assert.match(cssSource, /\.ytm-offset-btn\s*\{/)
   assert.match(cssSource, /\.ytm-offset-value\s*\{/)
+})
+
+// 左寄せのモード(ytm-align-left)で、ボタン列は左に寄るのに取得元の表示だけ
+// 真ん中に残っていた(中央寄せの margin auto / align-self center のまま)。
+test('左寄せのモードでは取得元の表示も左に寄せる(広い画面だけ)', () => {
+  const at = cssSource.indexOf('body.ytm-align-left #ytm-lyrics-source-debug.ytm-source-inline {')
+  assert.notEqual(at, -1, '左寄せの時の規則が無い')
+  const rule = cssSource.slice(at, cssSource.indexOf('}', at))
+  assert.match(rule, /margin-left: 0;/)
+  assert.match(rule, /align-self: flex-start;/)
+  // 狭い画面では隅に固定するので触らない
+  const media = cssSource.lastIndexOf('@media', at)
+  assert.match(cssSource.slice(media, at), /^@media \(min-width: 901px\) \{\s*$/)
 })

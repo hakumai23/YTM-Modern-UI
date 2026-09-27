@@ -155,7 +155,7 @@ function createBackgroundHarness({ api = {}, extra = {} } = {}) {
     getLrchubRecordId: API.getLrchubRecordId,
   }
 
-  // extra-providers.js(NetEase / AMLL / KuGou / LiriQo)。
+  // extra-providers.js(NetEase / AMLL / KuGou / LiriQo / BuaaaBot)。
   // 既定は「有効だが誰も歌詞を持っていない」。無効にして潰すと、
   // 配線が外れても既存のテストが素通りしてしまう。
   const defaultExtra = {
@@ -164,11 +164,14 @@ function createBackgroundHarness({ api = {}, extra = {} } = {}) {
     fetchFromNetease: async () => null,
     fetchFromKugou: async () => null,
     fetchFromLiriqo: async () => null,
+    fetchFromBuaaa: async () => null,
   }
 
   vm.runInNewContext(backgroundSource, {
     API: { ...defaultApi, ...api },
     Extra: { ...defaultExtra, ...extra },
+    // lyric-sources.js。既定は「標準の取得元は全部オン」。
+    Sources: { loadDisabledSources: async () => new Set() },
     CloudSync: { CLOUD_STORAGE_KEY: 'test-cloud-state', DEFAULT_CLOUD_STATE: {} },
     chrome,
     console: { debug() {}, error() {}, log() {}, warn() {} },
@@ -595,6 +598,7 @@ test('ふだんの設定では、LRCHub が速い回によそのサーバーを�
       fetchFromNetease: async () => { called.push('netease'); return null },
       fetchFromKugou: async () => { called.push('kugou'); return null },
       fetchFromLiriqo: async () => { called.push('liriqo'); return null },
+      fetchFromBuaaa: async () => { called.push('buaaa'); return null },
     },
   })
 
@@ -613,7 +617,8 @@ test('単語同期 優先なら、LRCHub が速くても単語同期を探しに
       fetchFromAmll: async () => { called.push('amll'); return null },
       fetchFromNetease: async () => { called.push('netease'); return null },
       fetchFromKugou: async () => { called.push('kugou'); return null },
-      // 3つとも空振りした時だけ、重い LiriQo まで手を伸ばす
+      fetchFromBuaaa: async () => { called.push('buaaa'); return null },
+      // LiriQo 以外が全部空振りした時だけ、重い LiriQo まで手を伸ばす
       fetchFromLiriqo: async () => { called.push('liriqo'); return null },
     },
   })
@@ -621,7 +626,7 @@ test('単語同期 優先なら、LRCHub が速くても単語同期を探しに
   harness.dispatch(wordSyncPayload)
   await settle()
 
-  assert.deepEqual(called.slice().sort(), ['amll', 'kugou', 'liriqo', 'netease'])
+  assert.deepEqual(called.slice().sort(), ['amll', 'buaaa', 'kugou', 'liriqo', 'netease'])
 })
 
 test('単語同期 優先でも、LRCHub が単語同期を持っていたらよそを叩かない', async () => {
@@ -632,6 +637,7 @@ test('単語同期 優先でも、LRCHub が単語同期を持っていたらよ
       fetchFromAmll: async () => { called.push('amll'); return null },
       fetchFromKugou: async () => { called.push('kugou'); return null },
       fetchFromLiriqo: async () => { called.push('liriqo'); return null },
+      fetchFromBuaaa: async () => { called.push('buaaa'); return null },
     },
   })
 
@@ -640,4 +646,60 @@ test('単語同期 優先でも、LRCHub が単語同期を持っていたらよ
 
   assert.equal(harness.responses[0].lyricsSource, 'lrchub')
   assert.deepEqual(called, [], `もう単語同期があるのに叩いている: ${called.join(', ')}`)
+})
+
+
+// ── BuaaaBot ────────────────────────────────────────────────
+// 配線の取り違え(別の ID で報告する・起こし忘れる)は、表示の出どころが
+// 嘘になるか、黙って一度も使われなくなる。流れの中で確かめる。
+
+test('LRCHub に無い曲では、BuaaaBot の単語同期が自分の名前で届く', async () => {
+  const seen = []
+  const harness = createBackgroundHarness({
+    api: {
+      fetchFromLrcLib: async () => ({ lyrics: '[00:01.00] lrclib line', candidates: [] }),
+    },
+    extra: {
+      fetchFromBuaaa: async (args) => {
+        seen.push(args)
+        return {
+          lyrics: '[00:01.00] buaaa line',
+          dynamicLines: [{ startTimeMs: 1000, text: 'ab', chars: [{ t: 1000, c: 'a' }, { t: 1200, c: 'b' }] }],
+        }
+      },
+    },
+  })
+
+  harness.dispatch(requestPayload)
+  await settle()
+
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].lyricsSource, 'buaaa')
+  assert.equal(harness.responses[0].sourceLabel, 'BuaaaBot')
+  assert.equal(harness.responses[0].lyrics, '[00:01.00] buaaa line')
+  // videoId で先に引くので、動画IDと長さを渡している
+  assert.equal(seen[0].video_id, 'video-abc')
+  assert.equal(seen[0].durationSec, 200)
+  assert.equal(seen[0].track, 'Extra Song')
+})
+
+test('別の歌詞を探す時も BuaaaBot に聞き、候補に名前を付けて出す', async () => {
+  const harness = createBackgroundHarness({
+    extra: {
+      fetchFromBuaaa: async () => ({ lyrics: '[00:01.00] buaaa line' }),
+    },
+  })
+
+  const replies = harness.dispatchMessage('FIND_ALTERNATE_LYRICS', {
+    track: 'Extra Song',
+    artist: 'Extra Artist',
+    duration_sec: 200,
+    video_id: 'video-abc',
+    exclude: ['lrchub'],
+  })
+  await settle()
+
+  const buaaa = replies[0].candidates.find(cand => cand.lyricsSource === 'buaaa')
+  assert.ok(buaaa, 'BuaaaBot が候補に入っていない')
+  assert.equal(buaaa.label, 'BuaaaBot')
 })

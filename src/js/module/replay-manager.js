@@ -277,6 +277,8 @@
     },
 
     check: async function () {
+      // 広告中は動画 ID や再生秒数が変わっても音楽の履歴に反映しない。
+      if (document.querySelector('.ad-interrupting, .ad-showing')) return;
       const video = document.querySelector('video');
       if (!video) return;
       const vid = getCurrentVideoId();
@@ -290,7 +292,25 @@
         this.lastSaveTime = 0;
         this.currentLyricLines = 0;
         this.recordedLyricLines = 0;
+        this._lastVideoTime = video.currentTime;
         return;
+      }
+
+      // 同じ曲の 2 周目(1 曲リピート・聴き終えてから頭へ戻した)。
+      // 新しい再生の目印を videoId の変化だけにしていたので、リピートで
+      // 何周しても 1 回のまま、再生時間だけが 1 件に積み上がっていた。
+      // 記録済みの周の後半から曲頭へ戻った時だけ、別の 1 回として数え直す。
+      const nowTime = video.currentTime;
+      const prevTime = this._lastVideoTime;
+      this._lastVideoTime = nowTime;
+      if (this.hasRecordedCurrent && !this.isRecording &&
+        Number.isFinite(nowTime) && Number.isFinite(prevTime) && Number.isFinite(video.duration) &&
+        video.duration > 10 && nowTime < 3 && prevTime > video.duration * 0.5) {
+        this.hasRecordedCurrent = false;
+        this.currentPlayTime = 0;
+        this.lastSaveTime = 0;
+        this.currentLyricLines = 0;
+        this.recordedLyricLines = 0;
       }
 
       if (!video.paused) {
@@ -496,6 +516,7 @@
       this._ensureFooter();
 
       if (stats.totalPlays === 0) {
+        container._ytmReplayHtml = null;
         container.innerHTML = `
           <div class="replay-empty">
             <div>${t('replay_empty')}</div>
@@ -577,7 +598,22 @@
       });
 
       html += `</div></div></div></div>`;
+
+      // 再生中は 5 秒ごとにここへ来る。中身ごと innerHTML で作り直すと
+      // ランキングのスクロール位置が毎回 0 に戻り、再生中はランキングの
+      // 2 画面目以降を読めなかった(実機で確認)。変わっていなければ触らず、
+      // 作り直す時もスクロール位置を引き継ぐ。期間を切り替えた時だけ頭から。
+      if (container._ytmReplayHtml === html) return;
+      const sameRange = container._ytmReplayRange === range;
+      const prevList = container.querySelector('.replay-list');
+      const listTop = sameRange && prevList ? prevList.scrollTop : 0;
+      const contentTop = sameRange ? container.scrollTop : 0;
       container.innerHTML = html;
+      container._ytmReplayHtml = html;
+      container._ytmReplayRange = range;
+      const nextList = container.querySelector('.replay-list');
+      if (nextList) nextList.scrollTop = listTop;
+      container.scrollTop = contentTop;
     },
 
     // フッターは中身が変わらないので、パネル 1 つにつき 1 回だけ組む。
@@ -615,5 +651,4 @@
       setInterval(() => this.check(), 1000);
     }
   };
-
 

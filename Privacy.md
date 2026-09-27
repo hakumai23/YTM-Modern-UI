@@ -1,6 +1,6 @@
 # Privacy Policy for YTM-Immersion
 
-**Last Updated:** August 15, 2026
+**Last Updated:** September 27, 2026
 
 YTM-Immersion ("we", "our", or "us") is a Chrome Extension developed by Naikaku. We are committed to protecting your privacy. This Privacy Policy explains how we collect, use, and safeguard your information when you use our extension.
 
@@ -21,6 +21,13 @@ To provide specific features, the extension sends limited data to the following 
   - **Data Sent:** Song title, artist name, album name, track duration, and — for SimpMusic Lyrics — the YouTube video ID of the track you are playing.
   - **Purpose:** To search for and download synchronized lyrics.
   - **Note:** These services are only queried when LRCHub cannot supply lyrics for the track.
+  - **Turning sources off:** Each of these services, as well as YouTube Music below, can be turned off in the extension's settings panel (Settings → Lyrics source → Sources to use). When a source is turned off, the extension stops requesting lyrics from it.
+
+- **Extra Lyrics Sources (off by default, opt-in):**
+  - **Services:** KuGou (krcs.kugou.com, lyrics.kugou.com), AMLL TTML Database (raw.githubusercontent.com, cdn.jsdelivr.net), NetEase Cloud Music (music.163.com), LiriQo (api.liriqo-alfarrizi.workers.dev), BuaaaBot (buaaa.buachi.work)
+  - **Data Sent:** Song title, artist name, and track duration — and, for LiriQo and BuaaaBot, the YouTube video ID of the track you are playing.
+  - **Purpose:** To find word-by-word synchronized lyrics, which the sources above rarely provide.
+  - **Note:** These are declared as optional permissions and are **never contacted until you explicitly allow them** in the extension's settings panel (Settings → Lyrics source → Sources to use) or on its options page. You can revoke access there at any time. Each source is granted separately, except that allowing AMLL TTML Database also allows NetEase Cloud Music, because both use music.163.com. No cookies or credentials are sent, and no account information or playback history leaves your device.
 
 - **Lyrics Fetching from YouTube Music:**
   - **Service:** YouTube Music (music.youtube.com)

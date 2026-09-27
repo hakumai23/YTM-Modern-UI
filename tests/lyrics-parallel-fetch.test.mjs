@@ -59,7 +59,7 @@ test('打ち切った YTM は届いた時に差し替えを試みる', () => {
 
 test('YTM の取得自体は今までどおり background と同時に始まる', () => {
   const between = uiSource.slice(
-    indexOfAll(uiSource, 'const ytmPromise = (window.YTMLyrics && video_id)'),
+    indexOfAll(uiSource, 'const ytmPromise = (window.YTMLyrics && video_id'),
     indexOfAll(uiSource, 'const backgroundPromise = safeRuntimeSendMessage'),
   )
   assert.doesNotMatch(between, /\bawait\b/, '2つの起動の間に待ちが入っている')

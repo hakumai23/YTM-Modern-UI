@@ -109,16 +109,24 @@ const QUEUE_OPEN_DWELL_MS = 160;
 
         const lyr = (res.lyrics || '');
         if (typeof lyr === 'string' && lyr.trim()) {
-          storage.set(key, {
-            cacheVersion: LYRICS_CACHE_VERSION,
-            record_id: res.record_id || null,
-            video_id: videoId,
-            lyrics: lyr,
-            dynamicLines: res.dynamicLines || null,
-            candidates: res.candidates || null,
-            lyricsSource: res.lyricsSource || res.source || 'lrchub',
-            fallbackUsed: !!res.fallbackUsed,
-            fetchedAt: Date.now(),
+          // 利用者が読み込んだ歌詞や自分で選んだ候補は上書きしない。
+          // 以前は確かめずに書いていたので、Up Next を開いたまま次の曲へ進むと、
+          // その曲に読み込んでおいた LRC が先読みの結果で消えていた
+          // (歌詞が無かった時の分岐は既に確かめていた)。
+          storage.get(key).then((existing) => {
+            if (LyricsCache.isUserOwned(existing)) return;
+            return storage.set(key, {
+              cacheVersion: LYRICS_CACHE_VERSION,
+              record_id: res.record_id || null,
+              video_id: videoId,
+              lyrics: lyr,
+              dynamicLines: res.dynamicLines || null,
+              // 本再生の保存(loadLyrics)と同じく、引き直せる候補の本文は落とす
+              candidates: LyricsCache.stripCandidateLyrics(res.candidates) || null,
+              lyricsSource: res.lyricsSource || res.source || 'lrchub',
+              fallbackUsed: !!res.fallbackUsed,
+              fetchedAt: Date.now(),
+            });
           }).then(() => {
             // Refresh highlight instantly if the panel is open.
             // syncQueue() だと署名が同じで再構築がスキップされ、枠線が更新されない。
@@ -326,7 +334,10 @@ const QUEUE_OPEN_DWELL_MS = 160;
         cancelDwell();
         dwellTimer = setTimeout(() => {
           dwellTimer = null;
-          // 離れたあとに発火しても困るので、まだ乗っているか確かめる
+          // 離れたあとに発火しても困るので、まだ乗っているか確かめる。
+          // Immersion の外では帯ごと隠している(style.css)が、切り替えの
+          // 瞬間に乗っていた時のためにここでも確かめる。
+          if (!document.body.classList.contains('ytm-custom-layout')) return;
           if (trigger.matches(':hover')) openPanel();
         }, QUEUE_OPEN_DWELL_MS);
       });
@@ -462,7 +473,8 @@ const QUEUE_OPEN_DWELL_MS = 160;
         // ため、実際に曲が変わった時にはネットワーク往復ゼロで表示できる。
         // 数曲先まで持っておくと、曲送りを連打された時も待ちが出ない。
         if (renderedCount >= 1 && renderedCount <= 3 && videoId &&
-          window.YTMLyrics && typeof window.YTMLyrics.fetch === 'function') {
+          window.YTMLyrics && typeof window.YTMLyrics.fetch === 'function' &&
+          !(Array.isArray(config.disabledLyricSources) && config.disabledLyricSources.includes('ytm'))) {
           window.YTMLyrics.fetch(videoId).catch(() => { });
         }
         renderedCount += 1;

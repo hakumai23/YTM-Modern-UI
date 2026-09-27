@@ -1,4 +1,4 @@
-// 追加プロバイダー(NetEase / AMLL / KuGou / LiriQo)の取り込み。
+// 追加プロバイダー(NetEase / AMLL / KuGou / LiriQo / BuaaaBot)の取り込み。
 //
 // どれも「単語同期を増やす」ために入れたので、単語の時刻が落ちたまま
 // 行同期として通ってしまうのが一番まずい。各フォーマットの読み取りと、
@@ -13,9 +13,12 @@ import test from 'node:test'
 import zlib from 'node:zlib'
 
 const {
+  buaaaMatchesTrack,
+  convertBuaaaResponse,
   convertLiriqoTrack,
   decodeKrcBase64,
   fetchFromAmll,
+  fetchFromBuaaa,
   fetchFromKugou,
   fetchFromLiriqo,
   fetchFromNetease,
@@ -491,7 +494,7 @@ test('曲名だけ合っていて長さが外れた候補は捨てる', () => {
 test('既定は全部有効', () => {
   assert.equal(EXTRA_PROVIDERS_ENABLED, true)
   assert.deepEqual(PROVIDER_SWITCHES, {
-    netease: true, amll: true, kugou: true, liriqo: true,
+    netease: true, amll: true, kugou: true, liriqo: true, buaaa: true,
   })
 })
 
@@ -502,14 +505,30 @@ test('禁止ヘッダー(Referer / Cookie)に頼っていない', () => {
   assert.ok(!/['"]Cookie['"]\s*:/i.test(code), 'fetch では Cookie を送れない')
 })
 
-test('background.js が4つとも呼んでいる', () => {
+test('background.js が全部呼んでいる', () => {
   const source = read('src/js/background.js')
-  for (const fn of ['fetchFromAmll', 'fetchFromNetease', 'fetchFromKugou', 'fetchFromLiriqo']) {
+  for (const fn of ['fetchFromAmll', 'fetchFromNetease', 'fetchFromKugou', 'fetchFromLiriqo', 'fetchFromBuaaa']) {
     assert.ok(source.includes(`Extra.${fn}`), `${fn} が配線されていない`)
   }
   // 候補メニューの表示名が無いと、乗り換え先に ID がそのまま出る。
-  for (const id of ['amll', 'netease', 'kugou', 'liriqo']) {
+  for (const id of PROVIDER_IDS) {
     assert.match(source, new RegExp(`^\\s{2}${id}: '`, 'm'))
+  }
+  // 「別の歌詞を探す」でも聞きにいく
+  const alternate = source.slice(source.indexOf("if (req.type === 'FIND_ALTERNATE_LYRICS')"))
+  for (const id of PROVIDER_IDS) {
+    assert.match(alternate, new RegExp(`\\['${id}', Extra\\.fetchFrom`), `${id} が別の歌詞を探す対象に入っていない`)
+  }
+})
+
+// background が単語同期を届けても、UI 側の許可リストに無いと黙って捨てられる。
+test('遅れて届いた単語同期を UI が受け取る取得元に全部入っている', () => {
+  const ui = read('src/js/module/lyrics-ui.js')
+  const start = ui.indexOf('const upgradableSources = [')
+  assert.notEqual(start, -1)
+  const block = ui.slice(start, ui.indexOf('];', start))
+  for (const id of PROVIDER_IDS) {
+    assert.ok(block.includes(`'${id}'`), `${id} が upgradableSources に無い`)
   }
 })
 
@@ -521,16 +540,25 @@ test('LiriQo は重いので最初の競走には出さない', () => {
   assert.ok(!/liriqo/i.test(block), 'LiriQo が毎回の競走に混ざっている')
   assert.match(block, /richSelectionTasks/)
 
-  // 単語同期を返せる4つは1か所でまとめて起こす。取りこぼすと
+  // 単語同期を返せる取得元(LiriQo 以外)は1か所でまとめて起こす。取りこぼすと
   // 「フォールバック段では走るが単語同期優先では走らない」がすぐ起きる。
   const starter = source.slice(
     source.indexOf('const startRichProviders = () => {'),
     source.indexOf('// LiriQo だけは別扱い'),
   )
-  for (const name of ['LyricsPlus', 'fetchFromAmll', 'fetchFromNetease', 'fetchFromKugou']) {
+  for (const name of ['LyricsPlus', 'fetchFromAmll', 'fetchFromNetease', 'fetchFromKugou', 'fetchFromBuaaa']) {
     assert.ok(starter.includes(name), `${name} が startRichProviders に入っていない`)
   }
   assert.ok(!/fetchFromLiriqo/.test(starter), 'LiriQo が一緒に起きてしまう')
+
+  // raw / limits / labels は添字で対応している。1つ足し忘れると、その取得元の
+  // 待ちが undefined になって即座に打ち切られる(表示に一度も勝てなくなる)。
+  const ids = [...starter.matchAll(/extraTask\(Extra\.\w+, '[^']+', '(\w+)'\)/g)].map(m => m[1])
+  const limits = starter.match(/const limits = \[([^\]]*)\]/)[1].split(',').map(v => v.trim()).filter(Boolean)
+  const labels = [...starter.match(/const labels = \[([^\]]*)\]/)[1].matchAll(/'(\w+)'/g)].map(m => m[1])
+  assert.deepEqual(labels, ['lyricsplus', ...ids], 'labels と起こす順が食い違っている')
+  assert.equal(limits.length, labels.length, 'limits の数が合っていない')
+  for (const limit of limits) assert.ok(Number(limit) > 0, `待ちの上限がおかしい: ${limit}`)
 })
 
 // 通信先を host_permissions に書くと、更新のたびに Chrome が
@@ -547,6 +575,7 @@ test('通信先は必須ではなく任意の権限に置く', () => {
     'https://krcs.kugou.com/*',
     'https://lyrics.kugou.com/*',
     'https://api.liriqo-alfarrizi.workers.dev/*',
+    'https://buaaa.buachi.work/*',
   ]) {
     assert.ok(optional.includes(host), `${host} が optional_host_permissions に無い`)
     assert.ok(!required.includes(host), `${host} を必須にすると更新時に無効化される`)
@@ -575,14 +604,30 @@ test('取得元と通信先の対応に抜けが無い', () => {
 
 // ここは chrome が無い Node なので、許可の問い合わせは必ず失敗する。
 // その状態で fetch に進んでしまうと、許可していない利用者から通信が出る。
+//
+// 戻り値だけ見ても分からない。404 や曲の突き合わせで null になった回と
+// 見分けが付かないので、通信そのものが起きなかったことを確かめる。
+// (本物の fetch に届かないよう、ここで差し替えて止める)
 test('許可が無ければ通信しない', async () => {
   assert.equal(typeof globalThis.chrome, 'undefined', '前提が崩れている')
-  for (const [name, fn] of Object.entries({ fetchFromAmll, fetchFromKugou, fetchFromLiriqo, fetchFromNetease })) {
-    assert.equal(
-      await fn({ track: 'テスト曲', artist: 'テスト歌手', durationSec: 200, video_id: 'abc' }),
-      null,
-      `${name} が許可の無いまま動いている`,
-    )
+  const realFetch = globalThis.fetch
+  const calls = []
+  globalThis.fetch = async (url) => {
+    calls.push(String(url))
+    throw new TypeError('テストでは通信しない')
+  }
+  try {
+    for (const [name, fn] of Object.entries({ fetchFromAmll, fetchFromBuaaa, fetchFromKugou, fetchFromLiriqo, fetchFromNetease })) {
+      calls.length = 0
+      assert.equal(
+        await fn({ track: 'テスト曲', artist: 'テスト歌手', durationSec: 200, video_id: 'abc' }),
+        null,
+        `${name} が許可の無いまま動いている`,
+      )
+      assert.deepEqual(calls, [], `${name} が許可の無いまま通信した`)
+    }
+  } finally {
+    globalThis.fetch = realFetch
   }
 })
 

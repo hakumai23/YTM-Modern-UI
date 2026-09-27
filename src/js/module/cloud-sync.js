@@ -470,7 +470,7 @@
     wrapper: null,
     title: null, artist: null, artwork: null,
     lyrics: null, input: null, settings: null,
-    btnArea: null, uploadMenu: null, deleteDialog: null,
+    btnArea: null, appBtnArea: null, uploadMenu: null, deleteDialog: null,
     meaningPanel: null,
     meaningBtn: null,
     summaryBtn: null,

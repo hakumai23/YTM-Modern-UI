@@ -1,20 +1,21 @@
 // ============================================================
-// 追加の歌詞プロバイダー (NetEase / AMLL / KuGou / LiriQo)
+// 追加の歌詞プロバイダー (NetEase / AMLL / KuGou / LiriQo / BuaaaBot)
 //
 // 既存の4つ(LRCHub / LrcLib / SimpMusic / LyricsPlus)のうち、単語同期を
 // 返せるのは実質 SimpMusic と LyricsPlus だけ。しかも LyricsPlus は
 // 無料枠の共用サーバーで、2026-09-19 時点では3ミラーとも 530 / 429 / 402 を
 // 返して1件も歌詞を出せなかった。単語同期の供給元をここで増やす。
-// 4つともキー不要・無料。
+// どれもキー不要・無料。
 //
 // ■ 入切(戻し方)
 //   EXTRA_PROVIDERS_ENABLED を false にすれば、呼び出し側を触らずに
-//   4つとも黙って null を返すようになる。個別に止めたい時は
+//   どれも黙って null を返すようになる。個別に止めたい時は
 //   PROVIDER_SWITCHES の該当キーだけ false。
 //
 // ■ 既定では動かない
-//   通信先は optional_host_permissions なので、利用者がオプションページ
-//   (src/options.html)で許可するまで、どれも黙って null を返す。
+//   通信先は optional_host_permissions なので、利用者が許可するまで、
+//   どれも黙って null を返す。許可の画面は src/options.html で、設定パネルの
+//   「追加の歌詞サーバー」に iframe で差し込んである(単体でも開ける)。
 //   理由は下の PROVIDER_ORIGINS のところに書いた。
 //
 // ■ ヘッダーについて
@@ -42,10 +43,11 @@ export const PROVIDER_SWITCHES = {
   amll: true,
   kugou: true,
   liriqo: true,
+  buaaa: true,
 };
 
 // ── 通信先(任意の権限) ──────────────────────────────────────
-// この4つは manifest の optional_host_permissions に置いてある。
+// ここに並べた通信先は manifest の optional_host_permissions に置いてある。
 // host_permissions に足すと、既存の利用者はアップデートのたびに
 // 「権限が増えたので無効化しました」を踏むことになるため。
 //
@@ -65,6 +67,7 @@ export const PROVIDER_ORIGINS = {
   ],
   kugou: ['https://krcs.kugou.com/*', 'https://lyrics.kugou.com/*'],
   liriqo: ['https://api.liriqo-alfarrizi.workers.dev/*'],
+  buaaa: ['https://buaaa.buachi.work/*'],
 };
 
 export const PROVIDER_IDS = Object.keys(PROVIDER_ORIGINS);
@@ -97,8 +100,60 @@ export const hasProviderPermission = (providerId) => new Promise(resolve => {
   }
 });
 
-// 取得元を叩いてよいか。切ってあるか、許可が無ければ黙って諦める。
-const isOn = async (key) => (isSwitchedOn(key) ? hasProviderPermission(key) : false);
+// ── 叩きすぎないための休止 ──────────────────────────────────
+//
+// 相手はどれも無料で開いているサーバー。429 を返されているのに曲ごとに
+// 叩き続けると、一時的な絞りが IP ごとの遮断に変わる。既存の LRCHub
+// (api.js のサーキットブレーカー)や LyricsPlus(ミラーごとの休止)と
+// 同じ考え方で、返事を見て休ませる。
+//
+// 404 は数えない。「その曲を持っていない」だけで、こちらの叩きすぎではない。
+// これを数えると、収録の少ない AMLL がすぐ止まってしまう。
+const RATE_LIMITED_REST_MS = 10 * 60 * 1000;   // 429 / 403: 相手が明確に断っている
+const UNAVAILABLE_REST_MS = 3 * 60 * 1000;     // 5xx / 通信不能: 落ちているか経路が塞がれている
+
+const providerRestUntil = new Map();
+
+export const isProviderResting = (providerId) => Date.now() < (providerRestUntil.get(providerId) || 0);
+
+const restProvider = (providerId, ms, why) => {
+  const until = Date.now() + ms;
+  if (until <= (providerRestUntil.get(providerId) || 0)) return;
+  providerRestUntil.set(providerId, until);
+  console.warn(`[YTM] ${providerId} を ${Math.round(ms / 60000)} 分休ませます (${why})`);
+};
+
+// 「持っていない」と「叩きすぎ」を呼び出し側が取り違えないよう分けて返す。
+export const NOT_FOUND = Symbol('not-found');
+
+// 取得元への問い合わせは全部ここを通す。通さない fetch を書かないこと
+// (1か所でも漏れると、そこだけ休まず叩き続ける)。
+const askProvider = async (providerId, url, options) => {
+  if (isProviderResting(providerId)) return null;
+  let res;
+  try {
+    res = await fetch(url, { cache: 'no-store', ...options });
+  } catch (e) {
+    restProvider(providerId, UNAVAILABLE_REST_MS, '通信できない');
+    return null;
+  }
+  if (res.status === 429 || res.status === 403) {
+    restProvider(providerId, RATE_LIMITED_REST_MS, `HTTP ${res.status}`);
+    return null;
+  }
+  if (res.status >= 500) {
+    restProvider(providerId, UNAVAILABLE_REST_MS, `HTTP ${res.status}`);
+    return null;
+  }
+  if (res.status === 404) return NOT_FOUND;
+  if (!res.ok) return null;
+  return res;
+};
+
+// 取得元を叩いてよいか。切ってある・許可が無い・休ませている間は黙って諦める。
+const isOn = async (key) => (
+  (isSwitchedOn(key) && !isProviderResting(key)) ? hasProviderPermission(key) : false
+);
 
 // ── デバッグログ ────────────────────────────────────────────
 // api.js と同じ作り。ES モジュールなので background.js のスコープは共有しない。
@@ -425,8 +480,10 @@ export const searchNetease = async (params = {}) => {
     limit: '10',
     offset: '0',
   });
-  const res = await fetch(NETEASE_SEARCH_URL, { method: 'POST', body, cache: 'no-store' });
-  if (!res.ok) return null;
+  // 検索の相手は music.163.com。AMLL も曲IDの割り出しで同じ所を叩くので、
+  // 休ませる時の名義も 'netease' で揃える(同じホストを二重に叩かない)。
+  const res = await askProvider('netease', NETEASE_SEARCH_URL, { method: 'POST', body });
+  if (!res || res === NOT_FOUND) return null;
   const json = await res.json();
   const songs = Array.isArray(json?.result?.songs) ? json.result.songs : [];
   const hit = pickRemoteCandidate(
@@ -451,8 +508,8 @@ export const fetchFromNetease = async (params = {}) => {
 
   const url = `${NETEASE_LYRIC_URL}?id=${encodeURIComponent(hit.id)}` +
     '&cp=false&lv=0&kv=0&tv=0&rv=0&yv=0&ytv=0&yrv=0';
-  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
-  if (!res.ok) return null;
+  const res = await askProvider('netease', url, { method: 'GET' });
+  if (!res || res === NOT_FOUND) return null;
   const json = await res.json();
 
   const yrc = String(json?.yrc?.lyric || '').trim();
@@ -618,14 +675,14 @@ export const parseTtml = (text) => {
 
 const fetchAmllFile = async (path) => {
   for (const base of AMLL_BASES) {
-    try {
-      const res = await fetch(`${base}/${path}`, { method: 'GET', cache: 'no-store' });
-      if (res.status === 404) return null;        // 収録が無い。別ミラーでも同じ
-      if (!res.ok) continue;
-      return await res.text();
-    } catch (e) {
-      // 次のミラーへ
+    const res = await askProvider('amll', `${base}/${path}`, { method: 'GET' });
+    if (res === NOT_FOUND) return null;           // 収録が無い。別ミラーでも同じ
+    if (!res) {
+      // 断られた・落ちている。askProvider が休止に入れているので、
+      // 別ミラーを試す意味はあっても、休止中なら次も即 null で返る。
+      continue;
     }
+    return await res.text();
   }
   return null;
 };
@@ -807,11 +864,8 @@ export const fetchFromKugou = async (params = {}) => {
   if (Number.isFinite(durationSec) && durationSec > 0) {
     search.set('duration', String(Math.round(durationSec * 1000)));
   }
-  const searchRes = await fetch(`${KUGOU_SEARCH_URL}?${search.toString()}`, {
-    method: 'GET',
-    cache: 'no-store',
-  });
-  if (!searchRes.ok) return null;
+  const searchRes = await askProvider('kugou', `${KUGOU_SEARCH_URL}?${search.toString()}`, { method: 'GET' });
+  if (!searchRes || searchRes === NOT_FOUND) return null;
   const searchJson = await searchRes.json();
   const hit = pickRemoteCandidate(
     (Array.isArray(searchJson?.candidates) ? searchJson.candidates : []).map(item => ({
@@ -833,11 +887,8 @@ export const fetchFromKugou = async (params = {}) => {
     fmt: 'krc',
     charset: 'utf8',
   });
-  const lyricRes = await fetch(`${KUGOU_DOWNLOAD_URL}?${download.toString()}`, {
-    method: 'GET',
-    cache: 'no-store',
-  });
-  if (!lyricRes.ok) return null;
+  const lyricRes = await askProvider('kugou', `${KUGOU_DOWNLOAD_URL}?${download.toString()}`, { method: 'GET' });
+  if (!lyricRes || lyricRes === NOT_FOUND) return null;
   const lyricJson = await lyricRes.json();
   const content = String(lyricJson?.content || '');
   if (!content) return null;
@@ -945,11 +996,11 @@ export const fetchFromLiriqo = async (params = {}) => {
     if (artist) search.set('artist', artist);
   } else return null;
 
-  const res = await fetch(`${LIRIQO_ENDPOINT}?${search.toString()}`, {
-    method: 'GET',
-    cache: 'no-store',
-  });
-  if (!res.ok) return null;
+  // LiriQo は個人が動かしている Cloudflare Worker。無料枠の1日あたりの
+  // 上限は「この拡張の利用者ぜんたい」で分け合う形になるので、断られたら
+  // いちばん長く休ませる相手でもある(他は各自の IP なので分散する)。
+  const res = await askProvider('liriqo', `${LIRIQO_ENDPOINT}?${search.toString()}`, { method: 'GET' });
+  if (!res || res === NOT_FOUND) return null;
   const json = await res.json();
   const best = pickBestLiriqoTrack(json?.tracks);
   if (!best) return null;
@@ -975,5 +1026,218 @@ export const fetchFromLiriqo = async (params = {}) => {
     return null;
   }
   YTMLog.log('[BG] LiriQo hit:', best.provider, best.syncLevel);
+  return result;
+};
+
+// ============================================================
+// 5. BuaaaBot (https://buaaa.buachi.work/api/lyrics/docs)
+//    日本語の曲を中心とした単語同期歌詞(TTML)を、
+//    LyricsPlus(KPoe)互換の JSON で返す API。
+//
+//    引き方は2通りある。
+//      id=<videoId>  : 登録してある動画IDとの完全一致。無ければ 404。
+//                      カバー動画はそのカバーの時刻にずらした歌詞が返る
+//                      (実測: 同じ曲の原曲とカバーで歌い出しが 900ms 違った)。
+//      title/artist  : 曲名での検索。これがかなり緩い。実測で、
+//                      「Lemon」をアーティスト「Nobody」で投げても米津玄師の
+//                      Lemon が返り、「Lemo」でも返った。duration を渡しても
+//                      絞り込みには使われない(100秒を渡しても 4分6秒の曲が返る)。
+//
+//    id と title を同時に渡すと、id が外れた時に黙って曲名検索に落ちるので、
+//    どちらで当たったのか見分けが付かない。だから分けて投げる。
+//    まず id だけで聞き、404 なら曲名で聞いて、返ってきた曲名・歌手・長さを
+//    こちらで突き合わせてから使う。id で当たったものは相手が曲を特定済み
+//    なので突き合わせない(カバーは歌手名が原曲と違うのが普通)。
+// ============================================================
+
+const BUAAA_ENDPOINT = 'https://buaaa.buachi.work/api/v2/lyrics/get';
+
+// 行の並びを取り出す。ドキュメント上の成功時の形は { status, data: { lyrics } } だが、
+// いまの実物はトップにも lyrics と metadata を載せている(LyricsPlus 互換)。
+// どちらか片方になっても読めるようにする。
+const buaaaRows = (json) => {
+  if (Array.isArray(json?.lyrics)) return json.lyrics;
+  if (Array.isArray(json?.data?.lyrics)) return json.data.lyrics;
+  return [];
+};
+
+// LyricsPlus(KPoe)互換の JSON を行に均す。
+//
+// 入力の形は api.js の convertLyricsPlusResponse と同じだが、あちらとは
+// 2点違う。行の終わりを持たせる(持たせないと lyrics-ui.js が最後の語を
+// 次の行まで塗り続ける)のと、ハモリ(isBackground)を本編に混ぜない
+// (本編と重なる別タイムラインなので、混ぜると語の時刻が行き来する)。
+// 行の本文も語から組み直す。印の付いたハモリは row.text にだけ残っていることがある。
+// なお 2026-09 時点の実物はハモリにも印を付けず、本編の語として並べてくる。
+export const convertBuaaaResponse = (json, want) => {
+  const rows = buaaaRows(json);
+  if (!rows.length) return null;
+  const lines = [];
+  for (const row of rows) {
+    const chars = [];
+    let lastWordEnd = null;
+    for (const syllable of (Array.isArray(row?.syllabus) ? row.syllabus : [])) {
+      if (syllable?.isBackground) continue;
+      const t = toFiniteMs(syllable?.time);
+      const before = chars.length;
+      pushChar(chars, t, syllable?.text);
+      if (chars.length > before) {
+        const dur = toFiniteMs(syllable?.duration);
+        // 長さの無い語が最後に来たら、手前の語の終わりは使わない
+        // (最後の語より前で終わる「終わり」になってしまう)。
+        lastWordEnd = (dur !== null && dur > 0) ? t + dur : null;
+      }
+    }
+    const startTimeMs = toFiniteMs(row?.time) ?? (chars.length ? chars[0].t : null);
+    if (startTimeMs === null) continue;
+    const text = chars.length ? chars.map(ch => ch.c).join('') : String(row?.text ?? '');
+    const rowDuration = toFiniteMs(row?.duration);
+    lines.push({
+      startTimeMs,
+      endTimeMs: lastWordEnd ?? ((rowDuration !== null && rowDuration > 0) ? startTimeMs + rowDuration : undefined),
+      text,
+      chars: chars.length ? chars : (text ? [{ t: startTimeMs, c: text }] : []),
+    });
+  }
+  return buildResult(lines, want);
+};
+
+// 歌詞がどこで終わるか(ミリ秒)。行と語の「開始+長さ」のいちばん遅いもの。
+// metadata.totalDuration も同じ値だが(実測10曲でミリ秒まで一致)、
+// data の下だけの形では載ってこないので、行から出す方を先に使う。
+export const buaaaLyricEndMs = (json) => {
+  let end = null;
+  const take = (time, duration) => {
+    const t = toFiniteMs(time);
+    if (t === null) return;
+    const d = toFiniteMs(duration);
+    const e = t + (d !== null && d > 0 ? d : 0);
+    if (end === null || e > end) end = e;
+  };
+  for (const row of buaaaRows(json)) {
+    take(row?.time, row?.duration);
+    for (const syllable of (Array.isArray(row?.syllabus) ? row.syllabus : [])) {
+      take(syllable?.time, syllable?.duration);
+    }
+  }
+  return end ?? parseTtmlTime(json?.metadata?.totalDuration);
+};
+
+// 曲名検索で返ってきたものが、いま流れている曲か。
+//
+// 相手の検索は緩い(実測: 「Lemon」を別の歌手で投げても米津玄師の Lemon が、
+// 「Overdose」を別の歌手で投げても なとり の Overdose が返る。部分一致も拾うので
+// 「初恋」に「初」が返る余地もある)。いちど採るとフォールバック段の早い者勝ちで
+// そのまま居座るので、次を全部満たしたものだけ使う。
+//
+//   曲名 : 一致か、付属物だけの違い(「千本桜」と「千本桜 (feat. 初音ミク)」)。
+//          「どちらかがもう一方を含む」では広すぎる(「初恋」と「初」、
+//          「Lemonade」と「Lemon」が通ってしまう)。
+//   長さ : 歌詞が曲より長くないこと、かつ曲の 3/4 以上を覆っていること。
+//          相手の totalDuration は曲の長さではなく最後の語の終わりなので、
+//          後奏のぶん必ず曲より短い(実測: Lemon は曲 256 秒・歌詞 246.7 秒、
+//          POP STAR は 283 秒・250.2 秒)。両側で「近いこと」を求めてはいけない。
+//          3/4 の境目は LiriQo の別曲判定(LIRIQO_MIN_COVERAGE)と同じ実測に拠る。
+//   歌手 : 一致(どちらかがもう一方を含む)。
+//          ただし曲名が一致で、歌手名の文字の種類が違う時(YouTube Music が
+//          ローマ字の Kenshi Yonezu、相手が漢字の 米津玄師)は突き合わせようがない。
+//          その時だけ、歌詞の終わりが曲の終わりのすぐ手前(後奏 15 秒以内)で
+//          あることを代わりに求める。同じ文字の種類で名前が違えば別の歌手とみなす。
+const BUAAA_LYRICS_OVERRUN_SEC = 3;     // 歌詞が曲より長くてよい幅(丸めと版の揺れ)
+const BUAAA_MIN_COVERAGE = 0.75;
+const BUAAA_ROMANIZED_OUTRO_SEC = 15;
+
+// NFKC・小文字・空白抜きにした曲名で、短い方の後ろに続くのが付属物か。
+const BUAAA_TITLE_SUFFIX = /^(?:[(\[【「『〈《<\-–—~〜:|/]|(?:featuring|feat|ft|with)(?![a-z]))/;
+const isTitleSuffixVariant = (a, b) => {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  if (short.length < 2 || long === short || !long.startsWith(short)) return false;
+  return BUAAA_TITLE_SUFFIX.test(long.slice(short.length));
+};
+
+// 仮名・漢字・ハングルを含むか。ローマ字表記との食い違いを見分けるのに使う。
+const CJK_SCRIPT = /[぀-ヿㇰ-ㇿ㐀-䶿一-鿿가-힯ｦ-ﾟ]/;
+
+export const buaaaMatchesTrack = (candidate, want) => {
+  const wantTitle = normalizeTrackTitle(want?.track);
+  const title = normalizeTrackTitle(candidate?.title);
+  if (!wantTitle || !title) return false;
+  const sameTitle = title === wantTitle;
+  if (!sameTitle && !isTitleSuffixVariant(title, wantTitle)) return false;
+
+  const wantSec = Number(want?.durationSec);
+  const endMs = Number(candidate?.lyricEndMs);
+  const lengthKnown = Number.isFinite(wantSec) && wantSec > 0 && Number.isFinite(endMs) && endMs > 0;
+  const endSec = endMs / 1000;
+  if (lengthKnown) {
+    if (endSec > wantSec + BUAAA_LYRICS_OVERRUN_SEC) return false;   // 歌詞が曲からはみ出す
+    if (endSec < wantSec * BUAAA_MIN_COVERAGE) return false;          // 曲の途中で歌詞が尽きる
+  }
+
+  const wantArtistRaw = String(want?.artist ?? '');
+  const artistRaw = String(candidate?.artist ?? '');
+  const wantArtist = normalizeArtist(wantArtistRaw);
+  const artist = normalizeArtist(artistRaw);
+  if (wantArtist && artist && (artist.includes(wantArtist) || wantArtist.includes(artist))) return true;
+
+  // ここから下は歌手を突き合わせられなかった回。付属物の違いまで許すと
+  // 同名の別の曲を拾う余地が広がるので、曲名の一致を求める。
+  if (!sameTitle || !lengthKnown) return false;
+  const cannotCompare = !wantArtist || !artist || CJK_SCRIPT.test(wantArtistRaw) !== CJK_SCRIPT.test(artistRaw);
+  if (!cannotCompare) return false;
+  return wantSec - endSec <= BUAAA_ROMANIZED_OUTRO_SEC;
+};
+
+// 返事を JSON として読む。「見つからない」は 404 で来るが、200 で
+// status: 'error' を返す形もありうるので、それも無かったことにする。
+const readBuaaaJson = async (res) => {
+  const json = await res.json().catch(() => null);
+  return (json && typeof json === 'object' && json.status !== 'error') ? json : null;
+};
+
+const buaaaMetadata = (json) => ({
+  title: json?.metadata?.title ?? json?.data?.title,
+  artist: json?.metadata?.artist ?? json?.data?.artist,
+});
+
+export const fetchFromBuaaa = async (params = {}) => {
+  if (!await isOn('buaaa')) return null;
+  const videoId = String(params.video_id || '').trim();
+  const track = String(params.track || '').trim();
+  const artist = String(params.artist || '').trim();
+
+  if (videoId) {
+    const res = await askProvider('buaaa', `${BUAAA_ENDPOINT}?${new URLSearchParams({ id: videoId })}`, { method: 'GET' });
+    // null は、断られた・落ちている・想定外の応答のどれか。どれでも曲名では
+    // 聞き直さない(429 / 403 / 5xx は askProvider が休止にも入れている)。
+    if (!res) return null;
+    if (res !== NOT_FOUND) {
+      // id で当たった。中身が使えなくても曲名で引き直さない。
+      // カバー動画の id で当たった時に曲名で引くと、原曲の時刻が返ってずれる。
+      const json = await readBuaaaJson(res);
+      const result = json ? convertBuaaaResponse(json, params) : null;
+      if (result) YTMLog.log('[BG] BuaaaBot hit (id):', videoId, buaaaMetadata(json).title || '');
+      return result;
+    }
+  }
+
+  if (!track) return null;
+  const search = new URLSearchParams({ title: track });
+  if (artist) search.set('artist', artist);
+  const durationSec = Number(params.durationSec);
+  if (Number.isFinite(durationSec) && durationSec > 0) {
+    search.set('duration', String(Math.round(durationSec)));
+  }
+  const res = await askProvider('buaaa', `${BUAAA_ENDPOINT}?${search.toString()}`, { method: 'GET' });
+  if (!res || res === NOT_FOUND) return null;
+  const json = await readBuaaaJson(res);
+  if (!json) return null;
+  const said = { ...buaaaMetadata(json), lyricEndMs: buaaaLyricEndMs(json) };
+  if (!buaaaMatchesTrack(said, params)) {
+    YTMLog.log('[BG] BuaaaBot は別の曲を返したので捨てる:', said.title, '/', said.artist);
+    return null;
+  }
+  const result = convertBuaaaResponse(json, params);
+  if (result) YTMLog.log('[BG] BuaaaBot hit (title):', said.title || track);
   return result;
 };

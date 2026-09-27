@@ -57,7 +57,8 @@ test('コードが叩くホストは権限に入っている', () => {
     (sourceText.match(/https:\/\/[a-z0-9.-]+/g) || [])
       .map(u => new URL(u + '/').hostname)
       // 遷移先・表示用のリンクで、fetch はしない
-      .filter(h => !['discord.gg', 'github.com', 'i.ytimg.com', 'youtu.be', 'www.youtube.com'].includes(h)),
+      // (www.apache.org は同梱した BudouX のライセンス表記)
+      .filter(h => !['discord.gg', 'github.com', 'i.ytimg.com', 'youtu.be', 'www.youtube.com', 'www.apache.org'].includes(h)),
   )
   const allowed = declaredHosts.map(p => new URL(p.replace('/*', '/')).hostname)
   hosts.forEach(h => {
