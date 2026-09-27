@@ -1818,28 +1818,27 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-meaning-panel {
   will-change: transform, opacity;
 }
 
-/* 再生済みの行は位置を保ったまま消し、手動スクロール中だけ再表示する */
+/* 通常は再生済みの行も残す。消す設定は完了時刻のクラスで別に制御する。 */
 body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-past {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: transform 0.5s, color 0.5s, opacity 1.2s ease 0.3s, visibility 0s linear 1.5s;
+  opacity: 0.3;
+  visibility: visible;
+  pointer-events: auto;
+  transition: transform 0.5s, color 0.5s, opacity 0.5s ease, visibility 0s;
 }
 
-body.ytm-custom-layout #my-lyrics-container.ytm-user-browsing-lyrics .lyric-line.lyric-past {
+body.ytm-custom-layout #my-lyrics-container.ytm-user-browsing-lyrics .lyric-line.lyric-completed {
   opacity: 0.3;
   visibility: visible;
   pointer-events: auto;
   transition: transform 0.5s, color 0.5s, opacity 0.2s ease, visibility 0s;
 }
 
-/* 設定「再生済みの歌詞を残す」がONのとき。
-   手動スクロール中と同じ見え方（薄く残す）に固定する。 */
-body.ytm-custom-layout.ytm-keep-past-lyrics #my-lyrics-container .lyric-line.lyric-past {
-  opacity: 0.3;
-  visibility: visible;
-  pointer-events: auto;
-  transition: transform 0.5s, color 0.5s, opacity 0.3s ease, visibility 0s;
+/* レイアウトは残して1秒で消す。スクロール/歌詞カード選択中は見える。 */
+body.ytm-custom-layout.ytm-fade-past-lyrics:not(.ytm-lyric-card-selecting) #my-lyrics-container:not(.ytm-user-browsing-lyrics) .lyric-line.lyric-completed {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: transform 0.5s, color 0.5s, opacity 1s ease, visibility 0s linear 1s;
 }
 
 #my-lyrics-container.moviemode .lyric-line {
@@ -1910,7 +1909,8 @@ body.ytm-custom-layout.ytm-animated-caption-mode #my-lyrics-container {
 }
 
 /* 上部の解説ボックスが、再生済み歌詞のフェードアウトを隠さないようにする */
-body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-past {
+body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-past,
+body.ytm-custom-layout #my-lyrics-container .lyric-line.lyric-completed {
   z-index: 6;
 }
 
@@ -5042,7 +5042,8 @@ body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line
   cursor: pointer;
 }
 
-body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line.lyric-past {
+body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line.lyric-past,
+body.ytm-custom-layout.ytm-lyric-card-selecting #my-lyrics-container .lyric-line.lyric-completed {
   opacity: 0.35;
   visibility: visible;
   pointer-events: auto;
