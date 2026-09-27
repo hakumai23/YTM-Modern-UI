@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
+// 取得元どうしの突き合わせは実物を使う
+const RealAgreement = await import('../src/js/module/lyrics-agreement.js')
 
 import * as API from '../src/js/module/api.js'
 
@@ -172,6 +174,7 @@ function createBackgroundHarness({ api = {}, extra = {} } = {}) {
     Extra: { ...defaultExtra, ...extra },
     // lyric-sources.js。既定は「標準の取得元は全部オン」。
     Sources: { loadDisabledSources: async () => new Set() },
+    Agreement: RealAgreement,
     CloudSync: { CLOUD_STORAGE_KEY: 'test-cloud-state', DEFAULT_CLOUD_STATE: {} },
     chrome,
     console: { debug() {}, error() {}, log() {}, warn() {} },
@@ -555,8 +558,10 @@ const wordSyncResult = (label) => ({
 })
 
 test('単語同期 優先: LRCHub の行同期を、あとから来た単語同期が置き換える', async () => {
+  // 中身は同じ歌詞(取得元が違っても本文は同じ)。中身の違う歌詞への
+  // 差し替えは、突き合わせで止まる(下の「突き合わせ」の節)。
   const harness = createBackgroundHarness({
-    api: { fetchFromLrchub: async () => ({ lyrics: '[00:01.00] hub line' }) },
+    api: { fetchFromLrchub: async () => ({ lyrics: '[00:01.00] kugou line' }) },
     extra: { fetchFromKugou: async () => wordSyncResult('kugou') },
   })
 
@@ -702,4 +707,163 @@ test('別の歌詞を探す時も BuaaaBot に聞き、候補に名前を付け�
   const buaaa = replies[0].candidates.find(cand => cand.lyricsSource === 'buaaa')
   assert.ok(buaaa, 'BuaaaBot が候補に入っていない')
   assert.equal(buaaa.label, 'BuaaaBot')
+})
+
+// ── 突き合わせ ──────────────────────────────────────────────
+//
+// 取得元に登録されている中身そのものが違うことがある(別の曲・ローマ字・
+// 切れ端)。届いた歌詞を互いに比べ、他と合わないものは出さない。出した後に
+// 外れと分かったら、合っている歌詞へ替える(correction)。
+
+const agreeLrc = (lines) => lines.map((line, i) => `[00:${String(10 + i * 3).padStart(2, '0')}.00] ${line}`).join('\n')
+const RIGHT = agreeLrc(['君の名前を呼んでいた', '夜が明けるまでずっと', '忘れられない約束を', '胸の奥にしまったまま', '風が吹いて花が散る', '二人で見た景色の中'])
+const RIGHT2 = agreeLrc(['君の名前を 呼んでいた', '夜が明けるまで ずっと', '忘れられない約束を', '胸の奥に しまったまま', '風が吹いて 花が散る', '二人で見た 景色の中'])
+const WRONG = agreeLrc(['雨の降る街を歩いて', '傘もささずに笑ってた', '知らない誰かの声がした', '遠くで鐘が鳴っている', '僕らはまだ子供のままで', '明日のことは分からない'])
+const asWordSync = (lyrics) => ({
+  lyrics,
+  dynamicLines: lyrics.split('\n').map((line, i) => ({
+    startTimeMs: 10000 + i * 3000,
+    text: line.replace(/^\[[^\]]*\]\s*/, ''),
+    chars: Array.from(line.replace(/^\[[^\]]*\]\s*/, '')).map((c, k) => ({ t: 10000 + i * 3000 + k * 100, c })),
+  })),
+})
+const later = () => {
+  let resolve
+  const promise = new Promise(r => { resolve = r })
+  return { promise, resolve }
+}
+
+test('LRCHub が別の曲を返しても、他の取得元どうしが合っていればそちらを出す', async () => {
+  const harness = createBackgroundHarness({
+    api: {
+      fetchFromLrchub: async () => ({ lyrics: WRONG }),
+      fetchFromLrcLib: async () => ({ lyrics: RIGHT, candidates: [] }),
+      fetchFromSimpMusic: async () => ({ lyrics: RIGHT2 }),
+    },
+  })
+  harness.dispatch(requestPayload)
+  await settle()
+
+  assert.notEqual(harness.responses[0].lyricsSource, 'lrchub')
+  assert.equal(harness.responses[0].agreement, 'confirmed')
+  assert.ok([RIGHT, RIGHT2].includes(harness.responses[0].lyrics))
+})
+
+test('出した後で外れと分かったら、合っている歌詞へ替える(品質が下がっても)', async () => {
+  const lrclib = later()
+  const simp = later()
+  const harness = createBackgroundHarness({
+    api: {
+      fetchFromLrchub: async () => asWordSync(WRONG),
+      fetchFromLrcLib: () => lrclib.promise,
+      fetchFromSimpMusic: () => simp.promise,
+    },
+  })
+  harness.dispatch(requestPayload)
+  await settle()
+  // 比べる相手が来ないうちは、LRCHub をそのまま出す(白紙で待たせない)
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+
+  lrclib.resolve({ lyrics: RIGHT, candidates: [] })
+  simp.resolve({ lyrics: RIGHT2 })
+  await settle()
+
+  const correction = harness.lyricsUpdates.find(u => u.message.payload.correction === true)
+  assert.ok(correction, '外れのまま替えていない')
+  assert.equal(correction.message.payload.replaces, 'lrchub')
+  assert.ok([RIGHT, RIGHT2].includes(correction.message.payload.lyrics))
+})
+
+test('YouTube Music の歌詞も票になる', async () => {
+  const lrclib = later()
+  const harness = createBackgroundHarness({
+    api: {
+      fetchFromLrchub: async () => ({ lyrics: WRONG }),
+      fetchFromLrcLib: () => lrclib.promise,
+    },
+  })
+  harness.dispatch(requestPayload)
+  await settle()
+  lrclib.resolve({ lyrics: RIGHT, candidates: [] })
+  await settle()
+  // LRCHub と LrcLib が食い違うだけでは決めない
+  assert.equal(harness.lyricsUpdates.filter(u => u.message.payload.correction).length, 0)
+
+  harness.dispatchMessage('LYRICS_REFERENCE', { request_id: requestPayload.request_id, lyrics: RIGHT2 })
+  await settle()
+  const correction = harness.lyricsUpdates.find(u => u.message.payload.correction === true)
+  assert.ok(correction, 'YouTube Music と合う LrcLib に替えていない')
+  assert.equal(correction.message.payload.lyricsSource, 'lrclib')
+})
+
+test('単語同期 優先: 先に届いた単語同期ではなく、確かな方を選ぶ', async () => {
+  const amll = later()
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: RIGHT }) },
+    extra: {
+      // 先に届くが、他のどれとも合わない
+      fetchFromKugou: async () => asWordSync(WRONG),
+      // 同じ歌詞で信頼の低い取得元
+      fetchFromBuaaa: async () => asWordSync(RIGHT2),
+      fetchFromAmll: () => amll.promise,
+    },
+  })
+  harness.dispatch({ ...requestPayload, lyric_source_mode: 'wordsync' })
+  await new Promise(resolve => setTimeout(resolve, 2))
+  amll.resolve(asWordSync(RIGHT))
+  await settle()
+
+  const sources = harness.lyricsUpdates.map(u => u.message.payload.lyricsSource)
+  assert.ok(!sources.includes('kugou'), '合わない単語同期に替えている')
+  assert.equal(sources.at(-1), 'amll')
+})
+
+// ── 候補が1つしか無い時 ──────────────────────────────────────
+// 比べる相手が無い・外れと分かっても代わりが無い時は、今までどおり出す
+// (白紙にしない)。待つのも、同時に走る取得元が答え終えるまで。
+
+test('候補が1つだけなら、そのまま出す(待たせない・訂正しない)', async () => {
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: RIGHT }) },
+  })
+  const started = Date.now()
+  harness.dispatch(requestPayload)
+  await settle()
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+  assert.equal(harness.responses[0].lyrics, RIGHT)
+  assert.equal(harness.responses[0].agreement, 'unknown')
+  assert.equal(harness.lyricsUpdates.filter(u => u.message.payload.correction).length, 0)
+  assert.ok(Date.now() - started < 1000)
+})
+
+test('クレジット1行だけでも、他に無ければ出す', async () => {
+  const credit = '[00:13.41] Lyrics by：Max Martin/Abel'
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: credit }) },
+  })
+  harness.dispatch(requestPayload)
+  await settle()
+  assert.equal(harness.responses[0].lyrics, credit)
+})
+
+test('YouTube Music の票と合わなくても、代わりが無ければ出したまま', async () => {
+  const harness = createBackgroundHarness({
+    api: { fetchFromLrchub: async () => ({ lyrics: agreeLrc(['君の名前を呼んでいた']) }) },
+  })
+  // 切れ端(1行)で、YouTube Music の歌詞と比べると外れと分かる
+  harness.dispatchMessage('LYRICS_REFERENCE', { request_id: requestPayload.request_id, lyrics: RIGHT })
+  harness.dispatch(requestPayload)
+  await settle()
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].lyricsSource, 'lrchub')
+  assert.equal(harness.lyricsUpdates.filter(u => u.message.payload.correction).length, 0)
+})
+
+test('どこにも歌詞が無ければ、今までどおり「無し」を返す', async () => {
+  const harness = createBackgroundHarness({})
+  harness.dispatch(requestPayload)
+  await settle()
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].success, false)
 })

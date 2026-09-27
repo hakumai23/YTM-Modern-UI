@@ -168,3 +168,53 @@ test('regular LRC keeps the current row active until the next timestamp', () => 
     { active: true, past: false },
   ])
 })
+
+// 3行が重なる所。以前は「前の行が1秒以内なら一緒に光らせる」規則が、
+// 他に光っている行が無い時だけ効いていた。重なった行が先に終わると消え、
+// 残りの行が終わった瞬間にこの規則が効き直して、歌い終わった2行目が
+// もう一度光っていた(語の動きも頭から流れ直す)。
+const lightsOf = (states) => states.map(s => (s.active ? 'A' : (s.past ? 'p' : '.'))).join('')
+
+test('3行が重なっても、歌い終わった行はもう一度光らない', () => {
+  const lines = [
+    { time: 0, text: 'Long', _dynamicRenderStartSec: 0, _dynamicRenderEndSec: 8 },
+    { time: 2, text: 'Short', _dynamicRenderStartSec: 2, _dynamicRenderEndSec: 4 },
+    { time: 3, text: 'Last', _dynamicRenderStartSec: 3, _dynamicRenderEndSec: 5 },
+    { time: 12, text: 'Next', _dynamicRenderStartSec: 12, _dynamicRenderEndSec: 13 },
+  ]
+  const harness = createHighlightHarness(lines, true)
+  const seen = []
+  for (let t = 0.5; t < 12; t += 0.1) {
+    const idx = lines.findLastIndex(l => l.time <= t)
+    seen.push(lightsOf(harness.runAt(t, idx))[1])
+  }
+  // 2行目は 2 秒から 4 秒まで光り、そのあとは一度も光らない
+  const firstOff = seen.indexOf('p', seen.indexOf('A'))
+  assert.ok(firstOff > 0)
+  assert.ok(!seen.slice(firstOff).includes('A'), seen.join(''))
+})
+
+test('他の行が歌っている間に消えた行は、その行が終わっても点き直さない', () => {
+  const lines = [
+    { time: 0, text: 'Backing', _dynamicRenderStartSec: 0, _dynamicRenderEndSec: 8 },
+    { time: 2, text: 'Main', _dynamicRenderStartSec: 2, _dynamicRenderEndSec: 4 },
+    { time: 12, text: 'Next', _dynamicRenderStartSec: 12, _dynamicRenderEndSec: 13 },
+  ]
+  const harness = createHighlightHarness(lines, true)
+  assert.equal(lightsOf(harness.runAt(3, 1)), 'AA.')
+  assert.equal(lightsOf(harness.runAt(5, 1)), 'A..')
+  // Backing が終わっても、4 秒で歌い終わった Main は点け直さない
+  assert.equal(lightsOf(harness.runAt(8.5, 1)), 'p..')
+  assert.equal(lightsOf(harness.runAt(12.5, 2)), 'ppA')
+})
+
+test('重なりが無ければ、歌い終わった行は次の行まで明るいまま', () => {
+  const lines = [
+    { time: 0, text: 'First', _dynamicRenderStartSec: 0, _dynamicRenderEndSec: 1.9 },
+    { time: 2, text: 'Second', _dynamicRenderStartSec: 2, _dynamicRenderEndSec: 4 },
+    { time: 9, text: 'Next', _dynamicRenderStartSec: 9, _dynamicRenderEndSec: 10 },
+  ]
+  const harness = createHighlightHarness(lines, true)
+  assert.equal(lightsOf(harness.runAt(3, 1)), 'pA.')
+  assert.equal(lightsOf(harness.runAt(6, 1)), 'pA.')
+})

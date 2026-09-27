@@ -2,6 +2,7 @@ import * as CloudSync from './module/bg-cloud-sync.js';
 import * as API from './module/api.js';
 import * as Extra from './module/extra-providers.js';
 import * as Sources from './module/lyric-sources.js';
+import * as Agreement from './module/lyrics-agreement.js';
 
 // ── デバッグログ ────────────────────────────────────────────
 // Service Worker には localStorage が無いので chrome.storage を見る。
@@ -31,6 +32,24 @@ const FALLBACK_GRACE_MS = 600;
 
 // LRCHub の一次問い合わせをどこまで待って「先に出す」判断をするか。
 const EARLY_HUB_WAIT_MS = 1500;
+// LRCHub が早く答えた時、他の取得元の答え(突き合わせの相手)を待つ上限。
+// LrcLib / SimpMusic / YouTube Music は同時に走っていて、たいていこの間に届く。
+const FIRST_OPINION_WAIT_MS = 500;
+// 「単語同期 優先」で、単語同期の候補を集めてから1つ選ぶまでの待ち。
+// 以前は最初に届いたものがそのまま採られ、後から届いたより確かなものに替わらなかった。
+const WORDSYNC_COLLECT_MS = 1000;
+
+// content script から届く YouTube Music の歌詞(突き合わせの票)を、
+// 走っている GET_LYRICS へ渡す口。キーは request_id。
+// 時計で消すと Service Worker を起こし続けるので、数で抑える(古いものから消す)。
+const lyricsReferenceSinks = new Map();
+const pendingLyricsReferences = new Map();
+const LYRICS_REFERENCE_KEEP = 4;
+const rememberLimited = (map, key, value) => {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > LYRICS_REFERENCE_KEEP) map.delete(map.keys().next().value);
+};
 
 // 待ちを重ねない。上の猶予は「最初の有効な結果が出てから」の総量として
 // 使い、段ごとに足し算しない。以前は 1.5 秒 + 0.6 秒 + 0.8 秒と積み上がり、
@@ -183,6 +202,36 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
     } catch (e) {
       sendResponse({ ok: false, error: String(e) });
     }
+    return true;
+  }
+
+  // YouTube Music の歌詞。表示には使わず、他の取得元の歌詞が合っているかを
+  // 確かめる票にする(content script でしか取れないので、届いたら渡してもらう)。
+  if (req.type === 'LYRICS_REFERENCE') {
+    const { request_id, lyrics } = req.payload || {};
+    if (request_id && typeof lyrics === 'string' && lyrics.trim()) {
+      const sink = lyricsReferenceSinks.get(request_id);
+      if (sink) sink(lyrics);
+      else rememberLimited(pendingLyricsReferences, request_id, lyrics);
+    }
+    sendResponse({ ok: true });
+    return;
+  }
+
+  // いま使わない取得元の一覧。content script はキャッシュを出す前にこれを見て、
+  // 切られた取得元の歌詞を出さない。追加の取得元の入切は Chrome の許可で、
+  // content script からは chrome.permissions が見えないのでここで答える。
+  if (req.type === 'GET_OFF_LYRIC_SOURCES') {
+    (async () => {
+      const off = new Set(await Sources.loadDisabledSources());
+      for (const providerId of Extra.PROVIDER_IDS) {
+        if (!Extra.EXTRA_PROVIDERS_ENABLED || Extra.PROVIDER_SWITCHES[providerId] === false ||
+          !await Extra.hasProviderPermission(providerId)) {
+          off.add(providerId);
+        }
+      }
+      sendResponse({ success: true, off: [...off] });
+    })().catch(() => sendResponse({ success: false, off: [] }));
     return true;
   }
 
@@ -485,11 +534,127 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       let deliveredProviderId = null;
       const resolvedHubResults = [];
 
+      // ── 取得元どうしの突き合わせ ──────────────────────────
+      // 取得元に登録されている中身そのものが違うことがある(別の曲・ローマ字・
+      // 切れ端・訳が混ざったもの)。届いた歌詞を全部ここに溜めて互いに比べ、
+      // 他と合わないものは出さない。出した後で外れと分かったら、合っている
+      // 歌詞へ替える(品質が下がっても。間違った歌詞より正しい行同期の方がいい)。
+      // 詳しくは lyrics-agreement.js。
+      const pool = new Map();   // source → result
+      const voters = [];        // YouTube Music の歌詞(票だけ)
+      let deliveredResult = null;
+      const opinionWaiters = new Set();
+      const entryOf = (r) => ({
+        key: r.source,
+        providerId: r.providerId,
+        lyrics: r.res?.lyrics,
+        quality: getHubLyricsQuality(r.res),
+      });
+      const verdictOf = (r) => (
+        r ? Agreement.judgeLyrics([...[...pool.values()].map(entryOf), ...voters], { track }).get(r.source) : undefined
+      );
+      const bestAgreedResult = (among = [...pool.values()]) => {
+        const others = [...pool.values()].filter(r => !among.includes(r)).map(entryOf);
+        const pick = Agreement.pickAgreedLyrics(among.map(entryOf), [...others, ...voters], { track });
+        return pick ? pool.get(pick.key) || null : null;
+      };
+      const waitForOpinion = (ms) => Promise.race([
+        API.delay(ms),
+        new Promise(resolve => opinionWaiters.add(resolve)),
+      ]);
+      const addOpinion = () => {
+        for (const wake of opinionWaiters) wake();
+        opinionWaiters.clear();
+        reviewDelivered();
+      };
+      const noteResult = (r) => {
+        if (!r || pool.has(r.source)) return;
+        pool.set(r.source, r);
+        addOpinion();
+      };
+      if (request_id) {
+        rememberLimited(lyricsReferenceSinks, request_id, (lyrics) => {
+          voters.splice(0, voters.length, { key: 'ytm', providerId: 'ytm', lyrics });
+          addOpinion();
+        });
+        const early = pendingLyricsReferences.get(request_id);
+        if (early) {
+          pendingLyricsReferences.delete(request_id);
+          voters.push({ key: 'ytm', providerId: 'ytm', lyrics: early });
+        }
+      }
+
+      const payloadOf = (r) => ({
+        ...(r.providerId === 'lrclib'
+          ? buildLrcLibPayload(r.res, true)
+          : buildHubLyricsPayload(r.res, r.source, r.providerId)),
+        agreement: verdictOf(r) || 'unknown',
+      });
+
       const sendHubLyrics = (hubRes, sourceLabel, providerId = 'lrchub') => {
         YTMLog.log(`[BG] Won: ${sourceLabel}`);
         deliveredHubQuality = Math.max(deliveredHubQuality, getHubLyricsQuality(hubRes));
         deliveredProviderId = providerId;
-        sendOnce(buildHubLyricsPayload(hubRes, sourceLabel, providerId));
+        deliveredResult = pool.get(sourceLabel) || { source: sourceLabel, providerId, res: hubRes };
+        sendOnce({ ...buildHubLyricsPayload(hubRes, sourceLabel, providerId), agreement: verdictOf(deliveredResult) || 'unknown' });
+      };
+
+      const sendLrcLibLyrics = (result) => {
+        deliveredProviderId = 'lrclib';
+        deliveredResult = result;
+        sendOnce(payloadOf(result));
+      };
+
+      // 出そうとしたものが既に外れと分かっていれば、合っている方を出す
+      const deliver = (result) => {
+        let chosen = result;
+        if (verdictOf(result) === 'contradicted') {
+          chosen = bestAgreedResult() || result;
+          if (chosen !== result) YTMLog.log(`[BG] ${result.source} は他の取得元と合わないので ${chosen.source} を出す`);
+        }
+        if (chosen.providerId === 'lrclib') sendLrcLibLyrics(chosen);
+        else sendHubLyrics(chosen.res, chosen.source, chosen.providerId);
+      };
+
+      // 外れと分かっているものしか手元に無い時は、代わりが届くまで少し待つ
+      // (実測: Blinding Lights の LRC Hub はクレジット1行だけで、YouTube Music の
+      //  歌詞と比べた時点で外れと分かるが、代わりの SimpMusic はまだ届いていない)。
+      // 同時に走っている取得元が全部答え終えたら、それ以上は待たない。
+      const deliverChecked = async (result) => {
+        for (let i = 0; i < 3; i++) {
+          if (verdictOf(result) !== 'contradicted' || bestAgreedResult()) break;
+          const settled = await Promise.race([
+            waitForOpinion(FIRST_OPINION_WAIT_MS).then(() => false),
+            Promise.allSettled([lrcLibTask, simpMusicRawTask].filter(Boolean)).then(() => true),
+          ]);
+          if (settled && !bestAgreedResult()) break;
+        }
+        if (!responded) deliver(result);
+      };
+
+      // 出した歌詞が、あとから届いた答えと合わないと分かったら替える
+      function reviewDelivered() {
+        if (!responded || !deliveredResult) return;
+        if (verdictOf(deliveredResult) !== 'contradicted') return;
+        const alt = bestAgreedResult();
+        if (!alt || alt === deliveredResult) return;
+        const replaces = deliveredProviderId;
+        YTMLog.log(`[BG] ${deliveredResult.source} は他の取得元と合わないので ${alt.source} に替える`);
+        deliveredResult = alt;
+        deliveredProviderId = alt.providerId;
+        deliveredHubQuality = alt.providerId === 'lrclib' ? 0 : getHubLyricsQuality(alt.res);
+        void pushLyricsUpdate({ ...payloadOf(alt), correction: true, replaces });
+      }
+
+      // 「単語同期 優先」で届いた単語同期は、少し集めてから選ぶ
+      const wordSyncPending = [];
+      let wordSyncFlushTimer = null;
+      const flushWordSync = () => {
+        wordSyncFlushTimer = null;
+        const best = bestAgreedResult(wordSyncPending.splice(0));
+        if (!best) return;
+        best.collected = true;
+        void pushHubUpgrade(best);
       };
 
       const pushHubUpgrade = async (hubResult) => {
@@ -509,10 +674,27 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         }
         const quality = getHubLyricsQuality(hubResult.res);
         if (quality <= deliveredHubQuality) return false;
+        // 他の取得元と合わないものへは替えない
+        const verdict = verdictOf(hubResult);
+        if (verdict === 'contradicted') return false;
+        // 表示中の歌詞と中身が違うものへは、他の取得元が裏付けている時か、
+        // 表示中より信頼できる取得元の時しか替えない(品質が上がるだけの
+        // 差し替えのはずが、確かでない別の曲に入れ替わるのを防ぐ)
+        if (
+          verdict !== 'confirmed' && deliveredResult?.res?.lyrics &&
+          Agreement.lyricsTrustRank(providerId) > Agreement.lyricsTrustRank(deliveredResult.providerId) &&
+          Agreement.lyricsAgreement(hubResult.res.lyrics, deliveredResult.res.lyrics) < Agreement.LYRICS_AGREE_MIN
+        ) return false;
+        if (preferWordSync && !hubResult.collected && quality >= 4 && deliveredHubQuality < 4) {
+          if (!wordSyncPending.includes(hubResult)) wordSyncPending.push(hubResult);
+          if (!wordSyncFlushTimer) wordSyncFlushTimer = API.delay(WORDSYNC_COLLECT_MS).then(flushWordSync);
+          return false;
+        }
         deliveredHubQuality = quality;
         deliveredProviderId = providerId;
+        deliveredResult = hubResult;
         YTMLog.log(`[BG] Upgrading lyrics quality to ${hubResult.source} (${quality})`);
-        return pushLyricsUpdate(buildHubLyricsPayload(hubResult.res, hubResult.source, providerId));
+        return pushLyricsUpdate({ ...buildHubLyricsPayload(hubResult.res, hubResult.source, providerId), agreement: verdict || 'unknown' });
       };
 
       const pushBestResolvedHubUpgrade = () => {
@@ -528,6 +710,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           .then(result => {
             if (result) {
               resolvedHubResults.push(result);
+              noteResult(result);
               offerProviderCandidate(providerId, result.res);
               if (responded) void pushHubUpgrade(result);
             }
@@ -578,6 +761,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           .then(result => {
             if (result) {
               lrcLibSettled = result;
+              noteResult(result);
               offerProviderCandidate('lrclib', result.res);
             }
             return result;
@@ -684,7 +868,15 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         API.delay(EARLY_HUB_WAIT_MS).then(() => earlyMarker),
       ]);
       if (earlyPrimary && earlyPrimary !== earlyMarker) {
-        sendHubLyrics(earlyPrimary.res, earlyPrimary.source, earlyPrimary.providerId);
+        // 比べる相手がまだ無ければ、少しだけ待つ(外れを出してから替えるより良い)
+        // 同時に走っている取得元が全部答え終えていれば、それ以上は待たない。
+        if (pool.size + voters.length < 2) {
+          await Promise.race([
+            waitForOpinion(FIRST_OPINION_WAIT_MS),
+            Promise.allSettled([lrcLibTask, simpMusicRawTask].filter(Boolean)),
+          ]);
+        }
+        await deliverChecked(earlyPrimary);
         pushBestResolvedHubUpgrade();
         // DynamicLRC (4) が先着していても、最上位の srv3 (5) を検索する。
         if (getHubLyricsQuality(earlyPrimary.res) < 5) {
@@ -706,6 +898,8 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           ].filter(Boolean));
           // それでも単語同期が1つも無ければ、重い LiriQo まで手を伸ばす。
           // fetch 自体には期限が無いので、待ちには必ず上限を付ける。
+          // 集めている途中の単語同期があれば、それを待つ(選ぶ前に重い LiriQo を起こさない)
+          if (wordSyncFlushTimer) await wordSyncFlushTimer;
           if (deliveredHubQuality < 4) await withLimit(startLiriqo(), 15000, 'liriqo');
         }
         return;
@@ -729,11 +923,10 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       if (earlyPrimary === earlyMarker) {
         if (simpMusicSettled && hasCharacterSyncedLines(simpMusicSettled.res?.dynamicLines)) {
           YTMLog.log('[BG] Won temporarily: SimpMusic (LRCHub slow)');
-          sendHubLyrics(simpMusicSettled.res, simpMusicSettled.source, simpMusicSettled.providerId);
+          deliver(simpMusicSettled);
         } else if (lrcLibSettled) {
           YTMLog.log('[BG] Won temporarily: LrcLib (LRCHub slow)');
-          sendOnce(buildLrcLibPayload(lrcLibSettled.res, true));
-          deliveredProviderId = 'lrclib';
+          deliver(lrcLibSettled);
         }
       }
 
@@ -835,7 +1028,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
       const winner = await firstValidResult([hubSelectionTask, fallbackSelectionTask]);
       if (winner && winner.providerId === 'lrchub') {
-        sendHubLyrics(winner.res, winner.source, winner.providerId);
+        deliver(winner);
         pushBestResolvedHubUpgrade();
         await Promise.allSettled([primarySelectionTask, searchSelectionTask, retrySelectionTask]);
         return;
@@ -852,21 +1045,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
             API.delay(POST_FALLBACK_GRACE_MS).then(() => graceMarker),
           ]);
           if (graceHub && graceHub !== graceMarker) {
-            sendHubLyrics(graceHub.res, graceHub.source, graceHub.providerId);
+            deliver(graceHub);
             pushBestResolvedHubUpgrade();
             await Promise.allSettled([primarySelectionTask, searchSelectionTask, retrySelectionTask]);
             return;
           }
 
           YTMLog.log(`[BG] Won temporarily: ${winner.source}`);
-          if (winner.providerId === 'lrclib') {
-            // LrcLib は行同期止まりなので、あとから LRCHub が届いたら譲る前提の
-            // 「暫定表示」として扱う(fallbackUsed = true)。
-            sendOnce(buildLrcLibPayload(winner.res, true));
-            deliveredProviderId = 'lrclib';
-          } else {
-            sendHubLyrics(winner.res, winner.source, winner.providerId);
-          }
+          // LrcLib は行同期止まりなので、あとから LRCHub が届いたら譲る前提の
+          // 「暫定表示」として扱う(fallbackUsed = true。deliver の中で分ける)。
+          deliver(winner);
         }
         pushBestResolvedHubUpgrade();
 

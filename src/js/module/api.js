@@ -1190,7 +1190,11 @@ export const parseDynamicLrc = (text) => {
     if (!line) continue;
     const m = line.match(/^\[(\d+:\d{2}(?:\.\d{1,3})?)\]\s*(.*)$/);
     if (!m) continue;
-    parsed.push({ lineMs: parseLrcTimeToMs(m[1]), rest: m[2] || '' });
+    // 行頭の歌い手の印(v1: / v2: / bg:)は歌詞ではない。SimpMusic の単語同期
+    // (Apple Music 由来)に付いていて、落とさないと「v1:아파트」のように
+    // 画面にそのまま出ていた(実測: APT.)。語の時刻の前にある時だけ落とす。
+    const rest = (m[2] || '').replace(/^(?:v\d{1,4}|bg)\s*:\s*(?=<\d)/i, '');
+    parsed.push({ lineMs: parseLrcTimeToMs(m[1]), rest });
   }
 
   const pushDistributed = (chars, chunk, startMs, endMs) => {

@@ -37,6 +37,8 @@ const run = (pip) => {
   const context = vm.createContext({
     ui: { lyrics },
     PipManager: { pipLyricsContainer: pip },
+    // 行ごとの動き(#113)。前の大きさで出した行の位置も捨てる
+    resetLyricRowMotion: (container) => { container._rowMotionReset = true },
   })
   vm.runInContext(
     `${sliceBetween('const recenterLyricsAfterResize = () => {', '// 窓の大きさが変わると語の横位置が動く')}\nrecenterLyricsAfterResize()`,
@@ -101,4 +103,11 @@ test('出し直しは組み直した時だけ(既にあるなら手前で帰る)
   const earlyReturn = uiSource.indexOf('return;', at)
   const restore = uiSource.indexOf('applyLyricsText(lastRawLyricsText)', at)
   assert.ok(earlyReturn < restore, '既存 UI の経路でも出し直している')
+})
+
+test('行ごとの動きも止める(前の大きさで出した行の位置を残さない)', () => {
+  const pip = makeContainer()
+  const lyrics = run(pip)
+  assert.equal(lyrics._rowMotionReset, true)
+  assert.equal(pip._rowMotionReset, true)
 })

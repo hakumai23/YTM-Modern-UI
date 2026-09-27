@@ -4033,16 +4033,6 @@ body.ytm-anim-idle #ytm-custom-bg::after {
   animation-play-state: paused !important;
 }
 
-/* 背景のアニメーションは CSS では止めておき、JS が 100ms ごとに進める
-   (lyrics-ui.js の stepBackgroundAnimations)。毎秒 60 回の全画面の描き直しが
-   GPU 時間の 9 割以上を占めていた。背景はぼかしてあるので、10 回に減らしても
-   見た目の差は 255 段階で最大 2 段(実測)。JS が動かない時は背景が止まるだけ。 */
-body.ytm-bg-stepped #ytm-custom-bg,
-body.ytm-bg-stepped #ytm-custom-bg::before,
-body.ytm-bg-stepped #ytm-custom-bg::after {
-  animation-play-state: paused !important;
-}
-
 /* 設定サイドバー下部の外部リンク(Discord / GitHub)。
    タブを切り替えても常に見える位置に置くため、保存ボタンの上に並べる。 */
 .settings-links {

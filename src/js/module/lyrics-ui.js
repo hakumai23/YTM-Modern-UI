@@ -482,6 +482,11 @@ const isLineDynamicallyActiveAtTime = (line, timeSec, tolerance = DYNAMIC_OVERLA
 // 「同期が細かい曲ほど見え方が悪くなる」という逆転になっていた。
 //
 // 他に本当に歌っている行があるならそちらに譲る(デュエット・重なり)。
+//
+// 譲るのは「自分が終わったあとに、他の行が歌っていた」なら、その行が
+// 終わった後もずっと。以前は「いま歌っている行があるか」だけを見ていたので、
+// 重なった行が先に終わると消え、残りの行が終わった所で点き直していた。
+// 歌い終わった行がもう一度光る(3行が重なる所で実機の指摘)。
 const isPrimaryRowLitAtTime = (lines, primaryIndex, timeSec) => {
   const primary = Array.isArray(lines) ? lines[primaryIndex] : null;
   if (!primary) return false;
@@ -490,8 +495,13 @@ const isPrimaryRowLitAtTime = (lines, primaryIndex, timeSec) => {
   if (!hasRange) return true;
   if (isLineDynamicallyActiveAtTime(primary, timeSec)) return true;
   if (timeSec < primary._dynamicRenderStartSec) return false;
+  const endSec = primary._dynamicRenderEndSec;
   return !lines.some((line, i) => (
-    i !== primaryIndex && isLineDynamicallyActiveAtTime(line, timeSec)
+    i !== primaryIndex &&
+    Number.isFinite(line?._dynamicRenderStartSec) &&
+    Number.isFinite(line?._dynamicRenderEndSec) &&
+    line._dynamicRenderStartSec <= timeSec + DYNAMIC_OVERLAP_TOLERANCE &&
+    line._dynamicRenderEndSec > endSec + DYNAMIC_OVERLAP_TOLERANCE
   ));
 };
 
@@ -889,6 +899,23 @@ const normalizeDisabledLyricSources = (value) => (
     : []
 );
 const isLyricSourceOn = (id) => !normalizeDisabledLyricSources(config.disabledLyricSources).includes(id);
+
+// 追加の取得元(extra-providers.js の PROVIDER_IDS と揃えること)。
+// 入切は Chrome の許可なので、ここからは見えない。background に聞く。
+const EXTRA_LYRIC_SOURCE_IDS = ['netease', 'amll', 'kugou', 'liriqo', 'buaaa'];
+
+// キャッシュに残っている歌詞の取得元が、いまは切られているか。
+// 切った取得元の歌詞をキャッシュから出し続けると、設定を変えても
+// 画面が変わらない(単語同期優先で、崩れた歌詞の取得元を切っても
+// その歌詞が残り続けていた)。
+const isCachedLyricSourceOff = async (source) => {
+  const id = String(source || '').trim().toLowerCase();
+  if (!id) return false;
+  if (BUILTIN_LYRIC_SOURCE_IDS.includes(id)) return !isLyricSourceOn(id);
+  if (!EXTRA_LYRIC_SOURCE_IDS.includes(id)) return false;
+  const res = await safeRuntimeSendMessage({ type: 'GET_OFF_LYRIC_SOURCES' });
+  return !!(res && res.success && Array.isArray(res.off) && res.off.includes(id));
+};
 
 // Apple Music 風の同期表示は body のクラスで切り替える。
 // 軽量モードでも動かす。
@@ -2275,6 +2302,58 @@ const hasCharacterSyncedLines = (value) => (
   ))
 );
 
+// ── 歌詞どうしの突き合わせ(lyrics-agreement.js の写し) ─────────────
+// 本体は background が使う ES module。ここは classic script なので import
+// できない。中身は tests/lyrics-agreement.test.mjs が突き合わせている。
+const LYRICS_AGREE_MIN = 0.7;
+const COMPARE_CREDIT_LABELS = [
+  '作詞', '作词', '作曲', '編曲', '编曲', '词曲', '詞曲', '词', '詞', '曲', '编', '編',
+  '制作', '製作', '监制', '監製', '出品', '发行', '發行', '混音', '録音', '录音', '母带', '母帶',
+  '和声', '和聲', '原唱', '翻唱', '演唱', '主唱', '歌手', '专辑', '專輯',
+  'lyrics', 'lyricist', 'lyric', 'written', 'writer', 'music', 'composer', 'composed',
+  'arranged', 'arranger', 'producer', 'produced', 'vocal', 'chorus', 'mixing', 'mastering',
+];
+const isCompareCreditLine = (line) => {
+  const m = line.match(/^([^:：]{1,24})[:：]/);
+  if (!m) return false;
+  const label = m[1].normalize('NFKC').toLowerCase().replace(/\s+/g, '');
+  return COMPARE_CREDIT_LABELS.some(known => label.includes(known));
+};
+const lyricTextForCompare = (lyrics) => String(lyrics ?? '')
+  .split(/\r?\n/)
+  .map(line => line.replace(/\[[^\]]*\]/g, '').replace(/<[^>]*>/g, '').trim()
+    .replace(/^(?:v\d{1,4}|bg)\s*:\s*/i, ''))
+  .filter(line => !isCompareCreditLine(line))
+  .join('\n')
+  .normalize('NFKC')
+  .toLowerCase()
+  .replace(/[^\p{L}\p{N}]+/gu, '');
+const lyricBigrams = (text) => {
+  const chars = Array.from(text).slice(0, 20000);
+  const set = new Set();
+  for (let i = 0; i < chars.length - 1; i++) set.add(chars[i] + chars[i + 1]);
+  return set;
+};
+const lyricsAgreement = (a, b) => {
+  const A = lyricBigrams(lyricTextForCompare(a));
+  const B = lyricBigrams(lyricTextForCompare(b));
+  if (!A.size || !B.size) return 0;
+  let shared = 0;
+  for (const g of A) if (B.has(g)) shared += 1;
+  return (2 * shared) / (A.size + B.size);
+};
+
+// 表示中の歌詞が、届いた歌詞と中身が違うか(別の曲・ローマ字・切れ端など)。
+// background が他の取得元と突き合わせて「合っている」と判定した歌詞
+// (agreement: 'confirmed')と食い違うなら、表示中の方が外れ。
+// srv3 は本文の形が違うので比べない。
+const displayedLyricsDisagreeWith = (selected) => {
+  const shown = typeof lastRawLyricsText === 'string' ? lastRawLyricsText : '';
+  if (!shown.trim() || !selected || selected.mode === 'animated') return false;
+  if (document.body.classList.contains('ytm-animated-caption-mode')) return false;
+  return lyricsAgreement(shown, selected.lyrics || selected.text) < LYRICS_AGREE_MIN;
+};
+
 const selectLyricsPayload = (payload) => {
   const lyrics = typeof payload?.lyrics === 'string' ? payload.lyrics : '';
   const animatedLyrics = typeof payload?.animated_lyrics === 'string' ? payload.animated_lyrics : '';
@@ -2313,13 +2392,22 @@ async function applyLateLyricsUpgrade(payload) {
   // (配列をここに直書きしているのは、この関数がテストで単体切り出しされ、
   //  外側の定数が存在しない文脈で実行されるため)
   const lateSource = payload && payload.lyricsSource;
+  // background が「表示中の歌詞は他の取得元と合わない」と判断して送ってきた訂正。
+  // 品質が下がっても(単語同期 → 行同期でも)替える。間違った歌詞より正しい
+  // 行同期の方がいい。訂正の相手が、いま表示している取得元の時だけ受ける
+  // (YouTube Music を出している時に、background が出した別の歌詞の訂正で
+  //  上書きしないため)。LrcLib への訂正もここだけは受ける。
+  const shownSource = typeof currentLyricsSource !== 'undefined' ? currentLyricsSource : null;
+  const isCorrection = !!(payload && payload.correction === true &&
+    (!payload.replaces || payload.replaces === shownSource));
   const upgradableSources = [
     'lrchub', 'ytm', 'simpmusic', 'lyricsplus',
     // extra-providers.js の取得元。ここに足し忘れると、background が
     // 単語同期を届けても UI 側が黙って捨てる。
     'amll', 'netease', 'kugou', 'liriqo', 'buaaa',
   ];
-  if (!payload || !upgradableSources.includes(lateSource) || !payload.success) return;
+  if (!payload || !payload.success) return;
+  if (!upgradableSources.includes(lateSource) && !(isCorrection && lateSource === 'lrclib')) return;
   if (!currentKey || payload.track_key !== currentKey) return;
   if (!activeLyricsRequestId || payload.request_id !== activeLyricsRequestId) return;
   if (payload.video_id && currentLyricsVideoId && payload.video_id !== currentLyricsVideoId) return;
@@ -2336,7 +2424,13 @@ async function applyLateLyricsUpgrade(payload) {
     currentLyricsFromPreferredYtm &&
     selected.mode !== 'animated'
   ) return;
-  if (currentLyricsResultPriority === 2 && selected.quality <= currentLyricsQuality) return;
+  // 他の取得元が裏付けた歌詞が、表示中のものと中身が違う時も訂正として扱う
+  // (表示中のものがキャッシュや、以前の取得で出た外れのことがある)。
+  const replacesWrong = isCorrection || (
+    payload.agreement === 'confirmed' &&
+    typeof displayedLyricsDisagreeWith === 'function' && displayedLyricsDisagreeWith(selected)
+  );
+  if (currentLyricsResultPriority === 2 && selected.quality <= currentLyricsQuality && !replacesWrong) return;
   const requestId = activeLyricsRequestId;
   const targetKey = currentKey;
   const targetVideoId = currentLyricsVideoId;
@@ -7269,6 +7363,14 @@ async function loadLyrics(meta, options = {}) {
   // this newer request is being resolved.
   lyricsApplyEpoch += 1;
   let cached = await storage.get(thisKey);
+  // 取得元を切った後は、その取得元のキャッシュを使わずに引き直す。
+  // 利用者が自分で読み込んだ歌詞(取得元を持たない)はそのまま使う。
+  if (
+    cached && typeof cached === 'object' && !cached.manualLyrics &&
+    await isCachedLyricSourceOff(cached.lyricsSource || cached.source)
+  ) {
+    cached = null;
+  }
   if (
     thisKey !== currentKey ||
     requestVideoId !== (currentLyricsVideoId || '') ||
@@ -7443,6 +7545,7 @@ async function loadLyrics(meta, options = {}) {
           if (!upgraded || !upgraded.hasSynced) return;
           // 候補の方も同期版に差し替える(時刻なしのまま残さない)
           noteYtmCandidate(upgraded);
+          sendYtmReference(upgraded);
           void applyLateLyricsUpgrade({
             success: true,
             lyricsSource: 'ytm',
@@ -7456,6 +7559,18 @@ async function loadLyrics(meta, options = {}) {
         },
       })
       : Promise.resolve(null);
+
+    // YouTube Music の歌詞は、他の取得元の歌詞が合っているかを確かめる票として
+    // background へ渡す(background からは YouTube Music を叩けない)。
+    const sendYtmReference = (ytmRes) => {
+      if (!ytmRes || typeof ytmRes.lyrics !== 'string' || !ytmRes.lyrics.trim()) return;
+      if (requestId !== activeLyricsRequestId) return;
+      void safeRuntimeSendMessage({
+        type: 'LYRICS_REFERENCE',
+        payload: { request_id: requestId, lyrics: ytmRes.lyrics },
+      });
+    };
+    void ytmPromise.then(sendYtmReference).catch(() => { });
 
     void ytmPromise
       .then(noteYtmCandidate)
@@ -7611,6 +7726,10 @@ async function loadLyrics(meta, options = {}) {
               dynamicLines: null,
               lyricsSource: 'ytm',
               fallbackUsed: !preferYtm || !synced,
+              // background の突き合わせと経路名は background が出した歌詞のもの。
+              // 経路名を残すと、YouTube Music を出しているのに「LRCHub」と表示していた。
+              agreement: undefined,
+              sourceLabel: undefined,
             };
           }
         }
@@ -7625,6 +7744,17 @@ async function loadLyrics(meta, options = {}) {
     const preferredLyrics = selectedResponse.text;
     const hasResponseLyrics = !!res?.success && !!preferredLyrics.trim();
     const responsePriority = hasResponseLyrics ? (res?.fallbackUsed ? 1 : 2) : 0;
+    // 先に出したキャッシュが外れ(他の取得元が裏付けた歌詞と中身が違う)なら、
+    // 品質が下がっても替える。本人が選んだ歌詞(優先度 3)は替えない。
+    const responseReplacesWrong = hasResponseLyrics && res?.agreement === 'confirmed' &&
+      currentLyricsResultPriority < 3 && selectedResponse.mode !== 'animated' &&
+      typeof data === 'string' && data.trim() &&
+      lyricsAgreement(data, responseLyrics || preferredLyrics) < LYRICS_AGREE_MIN;
+    if (responseReplacesWrong) {
+      YTMLog.log('[CS] キャッシュの歌詞は他の取得元と合わないので替える');
+      currentLyricsResultPriority = responsePriority;
+      currentLyricsQuality = selectedResponse.quality;
+    }
     // A late LRCHub event can overtake the original callback. Reject the
     // lower-priority fallback/failure before it mutates any LRCHub state.
     if (responsePriority < currentLyricsResultPriority) return;
@@ -9126,7 +9256,14 @@ function updateLyricHighlight(currentTime) {
         (lyricsData[idx].time - lyricsData[idx - 1].time) <= 1.0
       ) ? (idx - 1) : -1;
 
-      if (prevIdx >= 0) {
+      // 前の行が終わり時刻を持っているなら、光らせるかは下の
+      // 「いま歌っているか」だけで決める。ここで足すと、この規則が
+      // 効くのは他に光っている行が無い時だけなので、3行が重なる所で
+      // 歌い終わった前の行が、他の行が終わった瞬間にもう一度光っていた。
+      const prevLine = prevIdx >= 0 ? lyricsData[prevIdx] : null;
+      const prevHasRange = Number.isFinite(prevLine?._dynamicRenderStartSec) &&
+        Number.isFinite(prevLine?._dynamicRenderEndSec);
+      if (prevIdx >= 0 && !prevHasRange) {
         // デュエットモードでduetSideが異なる行（メイン⇔サブ）は追加しない
         // （1文字追跡タイムスタンプ時にサブボーカルがダブる原因になるため）
         const currentSide = lyricsData[idx]?.duetSide;
@@ -9942,41 +10079,55 @@ document.addEventListener('play', updateAmbientAnimationState, true);
 document.addEventListener('pause', updateAmbientAnimationState, true);
 updateAmbientAnimationState();
 
-// ── 背景のアニメーションは 1 秒に 10 回だけ進める ─────────────────
+// ── 背景のアニメーションは 1 秒に 10 回だけ描き直す ─────────────────
 // 背景(ジャケットをぼかしたもの)の漂いと回転は CSS アニメーションで、
 // そのままだと毎秒 60 回、画面全体が描き直しになる。隔離した Chrome で
 // この拡張のページが使う GPU 時間を測ると(macOS の GPU プロセスの累計)、
 // 再生中 226ms/秒のうち 94% がこれだった(背景を止めると 15ms/秒)。
-// 歌詞・ボタン・プレイヤーバーのぼかしも、背景が動くたびに全部描き直される。
+// 背景はぼかしてあるので、100ms ぶん進めても色の差は 255 段階の最大 2 段。
 //
-// 背景はぼかしてあるので、1 フレームで変わる色はほとんど無い。実機で
-// 100ms ぶん進めた前後を撮って比べても、背景の差は 255 段階の最大 2 段
-// (大半は 1 段未満)で、見て分からない。そこで CSS では止めておき
-// (ytm-bg-stepped)、ここで 100ms ごとに同じアニメーションを進める。
-// 動きの形(イージング・往復)は CSS のキーフレームのまま変わらない。
-// 見えていない時と一時停止中(ytm-anim-idle)は進めない。
+// 以前は CSS で止めておき、JS が 100ms ごとに currentTime を進めていた。
+// これだと背景の動きが合成スレッドから外れ、メインスレッドが毎回ページ全体の
+// アニメーション(歌詞の語の動きを含めて曲の後半で 90 個ほど)を列挙して
+// 書き換える。この版から Windows の利用者に重くなったという声が出た。
+//
+// いまは動かすのは合成スレッドのまま(この版より前と同じ)、進み方だけを
+// 100ms 刻みの階段にする(効果全体の easing に steps を入れる)。
+// キーフレームごとのイージング(animation-timing-function)はそのまま残るので、
+// 動きの形も速さも変わらない。値が変わらないフレームは描き直しが起きない。
+// JS は、アニメーションが作り直された時に1回ずつ刻みを入れるだけ。
+//
+// 隔離 Chrome(M1・同じ曲の同じ位置から 4 秒 ×3 巡)の GPU プロセス:
+// 刻まない CSS 40〜51ms/秒、JS で進める 8〜12、steps 16〜26。
+// 合成スレッドも 26〜28 / 13〜17 / 15〜19。GPU の軽さは JS 版とほぼ同じ。
 const BG_ANIMATION_NAMES = new Set(['ytmBgDrift', 'amFluid1', 'amFluid2']);
 const BG_ANIMATION_STEP_MS = 100;
-let bgAnimationLastStep = 0;
 
-const stepBackgroundAnimations = () => {
-  const now = performance.now();
-  const elapsed = bgAnimationLastStep ? now - bgAnimationLastStep : BG_ANIMATION_STEP_MS;
-  bgAnimationLastStep = now;
-  const body = document.body;
-  if (!body.classList.contains('ytm-custom-layout') || body.classList.contains('ytm-anim-idle')) return;
-  // タブが裏に回ってタイマーが間引かれた後も、一度に大きく飛ばさない
-  const step = Math.min(elapsed, BG_ANIMATION_STEP_MS * 2);
+// 呼ぶのはアニメーションが作り直された時だけなので、ページ全体から探してよい。
+// (背景の要素の getAnimations は、窓が隠れている間は空を返すことがあった)
+const quantizeBackgroundAnimations = () => {
+  if (typeof document.getAnimations !== 'function') return;
   for (const animation of document.getAnimations()) {
     if (!BG_ANIMATION_NAMES.has(animation.animationName)) continue;
-    animation.currentTime = (Number(animation.currentTime) || 0) + step;
+    const effect = animation.effect;
+    if (!effect || typeof effect.getTiming !== 'function') continue;
+    const timing = effect.getTiming();
+    const duration = Number(timing.duration);
+    if (!(duration > 0)) continue;
+    // jump-none は両端の値も1段ずつ持つので、往復の折り返しで止まらない
+    const steps = Math.max(2, Math.round(duration / BG_ANIMATION_STEP_MS));
+    const easing = `steps(${steps}, jump-none)`;
+    if (timing.easing === easing) continue;
+    try { effect.updateTiming({ easing }); } catch (e) { /* 刻めなければ滑らかなまま */ }
   }
 };
 
-if (typeof document.getAnimations === 'function') {
-  document.body.classList.add('ytm-bg-stepped');
-  setInterval(stepBackgroundAnimations, BG_ANIMATION_STEP_MS);
-}
+// 背景の CSS アニメーションは、Immersion の入切・背景の種類・軽量モードの
+// 切り替えのたびに作り直される。作り直されたら刻みを入れ直す。
+document.addEventListener('animationstart', (event) => {
+  if (BG_ANIMATION_NAMES.has(event.animationName)) quantizeBackgroundAnimations();
+}, true);
+quantizeBackgroundAnimations();
 
 ReplayManager.init();
 QueueManager.init();

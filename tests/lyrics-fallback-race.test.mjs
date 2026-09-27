@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
+// 取得元どうしの突き合わせは実物を使う
+const RealAgreement = await import('../src/js/module/lyrics-agreement.js')
 
 const backgroundSource = fs.readFileSync(
   new URL('../src/js/background.js', import.meta.url),
@@ -84,6 +86,7 @@ function createBackgroundHarness({ api = {}, disabledSources = [] } = {}) {
     },
     // lyric-sources.js。既定は「標準の取得元は全部オン」。
     Sources: { loadDisabledSources: async () => new Set(disabledSources) },
+    Agreement: RealAgreement,
     CloudSync: {
       CLOUD_STORAGE_KEY: 'test-cloud-state',
       DEFAULT_CLOUD_STATE: {},
