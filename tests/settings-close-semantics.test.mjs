@@ -34,6 +34,8 @@ const setup = ({ stored = {}, meta = { title: 'アイドル', artist: 'YOASOBI' 
   const rootVars = new Map()
   const loads = []
   let renders = 0
+  // PiP の背景は本体の明るさを写しているので、戻した時に写し直す
+  const pipBrightnessSyncs = []
   const etcMenu = { style: { props: {}, setProperty(k, v) { this.props[k] = v } } }
   const config = {
     uiScale: 1, lyricWeight: '800', bgBrightness: undefined,
@@ -58,6 +60,7 @@ const setup = ({ stored = {}, meta = { title: 'アイドル', artist: 'YOASOBI' 
     applyUiScale: (v) => { config.uiScale = v; rootVars.set('--ytm-ui-scale', String(v)) },
     getMetadata: () => meta,
     loadLyrics: async (m) => { loads.push(m) },
+    PipManager: { syncBackgroundBrightness: () => { pipBrightnessSyncs.push(rootVars.get('--ytm-bg-brightness')) } },
     document: {
       documentElement: {
         style: {
@@ -70,7 +73,7 @@ const setup = ({ stored = {}, meta = { title: 'アイドル', artist: 'YOASOBI' 
   })
   vm.runInContext(`${lifecycle}\nthis.api = { openSettings, closeSettings, get session() { return settingsSession } };`, context)
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(r => setImmediate(r)) }
-  return { api: context.api, config, classes, rootVars, loads, flush, etcMenu, renders: () => renders }
+  return { api: context.api, config, classes, rootVars, loads, flush, etcMenu, renders: () => renders, pipBrightnessSyncs }
 }
 
 test('開くたびに保存済みの値から描き直す', async () => {
@@ -99,6 +102,8 @@ test('保存せずに閉じると、画面に出していた値も config も開
   assert.equal(env.config.lyricSourceMode, 'ytm')
   // 保存したことの無い明るさは、既定(CSS の値)に戻す
   assert.equal(env.rootVars.has('--ytm-bg-brightness'), false)
+  // PiP も戻した後の明るさで写し直す(動かした 0.9 のまま残さない)
+  assert.deepEqual(env.pipBrightnessSyncs, [undefined])
   assert.equal(env.etcMenu.style.props.display, 'none', '表示言語の一覧が出たまま残る')
 })
 

@@ -2857,6 +2857,7 @@ const SETTINGS_STORAGE_KEYS = [
   'ytm_lyric_source_mode',
   'ytm_disabled_lyric_sources',
   'ytm_queue_pinned',
+  'ytm_pip_auto_open',
 ];
 const MEANING_PINNED_SONGS_KEY = 'ytm_meaning_pinned_songs';
 let meaningPinnedSongs = new Set();
@@ -5877,6 +5878,15 @@ async function restoreLyricEffectsPreferences() {
   config.keepPastLyrics = !config.fadePastLyrics;
 }
 
+// PiP の設定(タブを離れたら自動で開く)。
+// 起動時と設定パネルを初めて開いた時に読む。登録しておかないと
+// Chrome が呼んでくれないので、読んだらすぐ反映する。
+async function restorePipPreferences() {
+  const savedAutoOpen = await storage.get('ytm_pip_auto_open');
+  if (typeof savedAutoOpen === 'boolean') config.pipAutoOpen = savedAutoOpen;
+  PipManager.setAutoOpen(!!config.pipAutoOpen);
+}
+
 async function initSettings() {
   if (ui.settings) return;
   ui.settings = createEl('div', 'ytm-settings-panel', '', ``);
@@ -5917,6 +5927,7 @@ async function initSettings() {
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
   await restoreLyricEffectsPreferences();
   applyLyricEffectsSettings();
+  await restorePipPreferences();
 
   // ★スライダー初期値反映
   const weightStored = await storage.get('ytm_lyric_weight');
@@ -6018,6 +6029,7 @@ function closeSettings({ saved = false } = {}) {
   applyUiScale(config.uiScale);
   setOrClearRootVar('--ytm-lyric-weight', config.lyricWeight);
   setOrClearRootVar('--ytm-bg-brightness', config.bgBrightness);
+  PipManager.syncBackgroundBrightness();
   if (uiLangChanged) renderSettingsPanel();
   void applySourceChangesAfterClose(session);
 }
@@ -6374,6 +6386,17 @@ function renderSettingsPanel() {
               </label>
             </div>
 
+            <div class="settings-section-title">${t('settings_sec_pip')}</div>
+            <div class="settings-group-card">
+              <label class="setting-row toggle-label">
+                <span>
+                  <span class="setting-name">${t('settings_pip_auto_open')}</span>
+                  <span class="setting-desc" id="pip-auto-open-desc">${t('settings_pip_auto_open_desc')}</span>
+                </span>
+                <input type="checkbox" id="pip-auto-open-toggle" aria-describedby="pip-auto-open-desc">
+              </label>
+            </div>
+
           </div>
 
           <div class="settings-panel" id="panel-sources">
@@ -6528,6 +6551,7 @@ function renderSettingsPanel() {
   document.getElementById('animated-caption-toggle').checked = !!config.useAnimatedCaptions;
   document.getElementById('singer-colors-toggle').checked = !!config.useSingerColors;
   document.getElementById('meaning-always-toggle').checked = !!config.alwaysShowMeaning;
+  document.getElementById('pip-auto-open-toggle').checked = !!config.pipAutoOpen;
 
   document.getElementById('sync-offset-input').valueAsNumber = config.syncOffset || 0;
   document.getElementById('sync-offset-save-toggle').checked = config.saveSyncOffset;
@@ -6571,6 +6595,7 @@ function renderSettingsPanel() {
       const val = e.target.value;
       document.getElementById('bright-val').textContent = Math.round(val * 100) + '%';
       document.documentElement.style.setProperty('--ytm-bg-brightness', val);
+      PipManager.syncBackgroundBrightness();
       updateSliderFill(e.target);
     });
   }
@@ -6675,6 +6700,7 @@ function renderSettingsPanel() {
     config.useAnimatedCaptions = document.getElementById('animated-caption-toggle').checked;
     config.useSingerColors = document.getElementById('singer-colors-toggle').checked;
     config.alwaysShowMeaning = document.getElementById('meaning-always-toggle').checked;
+    config.pipAutoOpen = document.getElementById('pip-auto-open-toggle').checked;
     config.lyricWeight = document.getElementById('weight-slider').value;
     config.bgBrightness = document.getElementById('bright-slider').value;
     config.uiScale = normalizeUiScale(document.getElementById('ui-scale-slider')?.value);
@@ -6700,6 +6726,7 @@ function renderSettingsPanel() {
       storage.set('ytm_singer_colors_enabled', config.useSingerColors),
       storage.set('ytm_lrclib_fallback', config.useLrcLibFallback),
       storage.set(MEANING_ALWAYS_SHOW_KEY, config.alwaysShowMeaning),
+      storage.set('ytm_pip_auto_open', config.pipAutoOpen),
       storage.set('ytm_main_lang', config.mainLang),
       storage.set('ytm_sub_lang', config.subLang),
       storage.set('ytm_ui_lang', config.uiLang),
@@ -6724,6 +6751,8 @@ function renderSettingsPanel() {
     }
     document.documentElement.style.setProperty('--ytm-lyric-weight', config.lyricWeight);
     document.documentElement.style.setProperty('--ytm-bg-brightness', config.bgBrightness);
+    PipManager.syncBackgroundBrightness();
+    PipManager.setAutoOpen(!!config.pipAutoOpen);
     applyUiScale(config.uiScale);
 
     const translationChanged = (
@@ -9817,6 +9846,7 @@ const artworkDimFor = (luminance) => {
 };
 const applyArtworkDim = (luminance) => {
   document.documentElement.style.setProperty('--ytm-bg-art-dim', artworkDimFor(luminance).toFixed(3));
+  PipManager.syncBackgroundBrightness();
 };
 const ARTWORK_SWAP_MAX_WAIT_MS = 1500;
 
@@ -9886,6 +9916,8 @@ function updateMetaUI(meta) {
       artworkPlaced = true;
       ui.artwork.replaceChildren(img);
       if (ui.summaryBtn) ui.artwork.appendChild(ui.summaryBtn);
+      // PiP も同じ時に差し替える(曲が変わった瞬間に写すと前の曲の画像になる)
+      PipManager.updateArtwork(img.src);
     };
     img.onload = () => {
       if (bgToken !== _bgLoadToken) return;   // もう次の曲になっている
@@ -10051,6 +10083,9 @@ const runtimeSettingsReady = (async function applySavedRuntimeSettings() {
   if (lowCpuStored !== null) config.lowCpuMode = !!lowCpuStored;
   document.body.classList.toggle('ytm-lightweight-mode', !!config.lowCpuMode);
   applyLyricEffectsSettings();
+
+  // 6. PiP(背景の明るさ・タブを離れたら自動で開く)
+  await restorePipPreferences();
 })().catch((error) => {
   console.warn('[YTM] Failed to restore saved runtime settings:', error);
 });

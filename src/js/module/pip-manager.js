@@ -44,11 +44,13 @@ const forceStyle = pipDoc.createElement('style');
           isolation: isolate; 
         }
         
-        /* 背景レイヤー：明るさを0.8まで上げ、ブラーを滑らかに */
+        /* 背景レイヤー。明るさは通常画面と同じ値を syncBackgroundBrightness が
+           --pip-bg-brightness に入れる(以前は 0.8 固定で、明るいジャケットの
+           曲ほど PiP だけ明るく、白い歌詞が沈んでいた)。 */
         #pip-bg-layer {
           position: absolute; inset: -20%;
           background-size: cover; background-position: center;
-          filter: blur(80px) saturate(1.4) brightness(0.8);
+          filter: blur(80px) saturate(1.4) brightness(var(--pip-bg-brightness, 0.65));
           z-index: -3; transition: background-image 1.2s ease;
         }
         
@@ -366,6 +368,7 @@ const forceStyle = pipDoc.createElement('style');
             
             
             pipDoc.head.appendChild(forceStyle);
+      this.syncBackgroundBrightness();
       pipDoc.body.className = 'ytm-pip-mode';
       if (document.body.classList.contains('ytm-no-lyrics')) pipDoc.body.classList.add('ytm-no-lyrics');
       if (document.body.classList.contains('ytm-no-timestamp')) pipDoc.body.classList.add('ytm-no-timestamp');
@@ -540,6 +543,46 @@ pipDoc.body.innerHTML = `
       await this.start();
     },
 
+    // 背景の明るさを通常画面に合わせる。
+    // 通常画面は「背景の明るさ」× ジャケットごとの減光(--ytm-bg-art-dim)。
+    // PiP は別文書で本体の CSS 変数が届かないので、掛けた値を渡す。
+    // 呼ぶ所: 開いた時・明るさを動かした時・保存/取り消し・曲が変わって減光が変わった時。
+    syncBackgroundBrightness: function () {
+      const root = this.pipWindow?.document?.documentElement;
+      if (!root) return;
+      const css = getComputedStyle(document.documentElement);
+      const brightness = parseFloat(css.getPropertyValue('--ytm-bg-brightness')) || DEFAULT_BG_BRIGHTNESS;
+      const dim = parseFloat(css.getPropertyValue('--ytm-bg-art-dim')) || 1;
+      root.style.setProperty('--pip-bg-brightness', (brightness * dim).toFixed(3));
+    },
+
+    // タブを離れた時に自動で開く(設定「タブを離れた時に PiP を開く」)。
+    //
+    // PiP はふつうユーザー操作が無いと開けない。例外が Chrome 134 からの
+    // 自動 PiP で、音の出ている再生中のタブから別のタブへ移った時にだけ、
+    // Media Session の "enterpictureinpicture" に登録した処理を操作なしで
+    // 呼んでくれる。初めての時は Chrome が「自動で開いてよいか」を尋ねる。
+    // 開いた窓は、タブへ戻ると Chrome が閉じる。
+    //
+    // オフの時は登録を外す(null)。Chrome 142 からは、登録の無いサイトで
+    // Chrome が自前で動画の PiP を開くことがあり、それを邪魔しないため。
+    setAutoOpen: function (enabled) {
+      try {
+        navigator.mediaSession.setActionHandler('enterpictureinpicture', enabled
+          ? () => {
+            if (this.pipWindow) return;
+            // Immersion を一度も開いていないと、PiP に写す器(ui.*)がまだ無い。
+            // 組むだけで画面には出ない(出すかどうかは body のクラス)。
+            // requestWindow より前に await を挟まないこと。自動で開ける猶予が切れる。
+            if (!ui.lyrics) initLayout();
+            void this.start();
+          }
+          : null);
+      } catch (e) {
+        // 自動 PiP に対応していない Chrome(133 以前)。設定は効かないだけ
+      }
+    },
+
     updateLikeState: function (targetDoc) {
       const doc = targetDoc || (this.pipWindow ? this.pipWindow.document : null);
       if (!doc) return;
@@ -581,16 +624,22 @@ pipDoc.body.innerHTML = `
       const pipDoc = this.pipWindow.document;
       const tEl = pipDoc.getElementById('pip-title');
       const aEl = pipDoc.getElementById('pip-artist');
-      const iEl = pipDoc.getElementById('pip-img');
-      const bgEl = pipDoc.getElementById('pip-bg-layer');
       if (tEl) tEl.textContent = title;
       if (aEl) aEl.textContent = artist;
-      if (ui.artwork.querySelector('img')) {
-        const src = ui.artwork.querySelector('img').src;
-        if (iEl) iEl.src = src;
-        if (bgEl) bgEl.style.backgroundImage = `url(${src})`;
-      }
+      // ジャケットはここでは触らない。曲が変わった直後の ui.artwork はまだ
+      // 前の曲の画像(新しい画像が読み終わるまで前のを出し続ける作り)で、
+      // ここで写すと PiP だけ1曲前のジャケットのまま次の曲まで残っていた。
+      // 差し替わった時に updateArtwork が呼ばれる(lyrics-ui.js の placeArtwork)。
       this.updateLikeState(pipDoc);
+    },
+
+    updateArtwork: function (src) {
+      if (!this.pipWindow || !src) return;
+      const pipDoc = this.pipWindow.document;
+      const iEl = pipDoc.getElementById('pip-img');
+      const bgEl = pipDoc.getElementById('pip-bg-layer');
+      if (iEl) iEl.src = src;
+      if (bgEl) bgEl.style.backgroundImage = `url("${String(src).replace(/["\\]/g, '\\$&')}")`;
     },
 
     resetLyrics: function () {

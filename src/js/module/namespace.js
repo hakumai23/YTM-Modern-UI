@@ -315,6 +315,8 @@ const normalizeSearchTrackTitle = (s) => {
     disabledLyricSources: [],
     alwaysShowMeaning: false,
     lowCpuMode: false,
+    // タブを離れた時に PiP を自動で開く(Chrome の自動 PiP。pip-manager.js)
+    pipAutoOpen: false,
     // UIサイズ (1 = 100%)。CSS 変数 --ytm-ui-scale に反映される。
     uiScale: 1
   };
@@ -418,6 +420,9 @@ const normalizeSearchTrackTitle = (s) => {
       settings_bg_brightness: "背景の明るさ",
       settings_lyric_weight: "歌詞の太さ",
       settings_meaning_always: "歌詞の解説がある時は常に表示する",
+      settings_sec_pip: "PiP（小窓）",
+      settings_pip_auto_open: "タブを離れた時に PiP を開く",
+      settings_pip_auto_open_desc: "再生中に別のタブへ移ると開き、戻ると閉じます。初めての時は Chrome が許可を求めます(Chrome 134 以降)。",
       settings_sec_translation: "歌詞の翻訳",
       settings_lang_original: "原文",
       settings_optional: "任意",
@@ -535,6 +540,9 @@ const normalizeSearchTrackTitle = (s) => {
       settings_bg_brightness: "Background brightness",
       settings_lyric_weight: "Lyrics weight",
       settings_meaning_always: "Always show lyric notes when available",
+      settings_sec_pip: "Picture-in-Picture",
+      settings_pip_auto_open: "Open PiP when leaving the tab",
+      settings_pip_auto_open_desc: "Opens when you switch to another tab during playback and closes when you come back. Chrome asks for permission the first time (Chrome 134 or later).",
       settings_sec_translation: "Lyrics translation",
       settings_lang_original: "Original",
       settings_optional: "Optional",
@@ -652,6 +660,9 @@ const normalizeSearchTrackTitle = (s) => {
       settings_bg_brightness: "배경 밝기",
       settings_lyric_weight: "가사 굵기",
       settings_meaning_always: "가사 해설이 있으면 항상 표시",
+      settings_sec_pip: "PiP(작은 창)",
+      settings_pip_auto_open: "탭을 벗어나면 PiP 열기",
+      settings_pip_auto_open_desc: "재생 중 다른 탭으로 이동하면 열리고, 돌아오면 닫힙니다. 처음에는 Chrome이 권한을 요청합니다(Chrome 134 이상).",
       settings_sec_translation: "가사 번역",
       settings_lang_original: "원문",
       settings_optional: "선택",
@@ -769,6 +780,9 @@ const normalizeSearchTrackTitle = (s) => {
       settings_bg_brightness: "背景亮度",
       settings_lyric_weight: "歌词粗细",
       settings_meaning_always: "有歌词解说时始终显示",
+      settings_sec_pip: "画中画（小窗）",
+      settings_pip_auto_open: "离开标签页时打开画中画",
+      settings_pip_auto_open_desc: "播放时切换到其他标签页会打开，返回后关闭。首次使用时 Chrome 会请求权限（需要 Chrome 134 或更高版本）。",
       settings_sec_translation: "歌词翻译",
       settings_lang_original: "原文",
       settings_optional: "可选",
