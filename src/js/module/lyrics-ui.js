@@ -9574,6 +9574,114 @@ let _cachedLayoutEl = null;
 // 監視(setupObserver)が組まれたら、その予約関数に差し替わる。
 let requestImmersionTick = () => { void tick(); };
 
+// IMMERSION ボタンの置き場所。YTM がプレイヤーバーの作りを変えても
+// 入口が消えないよう、前から順に「画面に見えている」最初の所へ入れる。
+// 以前は .right-controls-buttons 決め打ちで、これが無くなると
+// ボタンが出ず、Immersion を開く手段がまるごと無くなっていた。
+const MODE_TOGGLE_HOSTS = [
+  ['ytmusic-player-bar .right-controls-buttons', 'prepend'],
+  ['.right-controls-buttons', 'prepend'],
+  ['ytmusic-player-bar .right-controls', 'prepend'],
+  ['ytmusic-player-bar #right-controls', 'prepend'],
+];
+const MODE_TOGGLE_FLOATING_CLASS = 'ytm-mode-toggle-floating';
+// 本来の置き場所(先頭 2 つはどちらも .right-controls-buttons)以外に
+// いる間は、見張りが毎回選び直して、戻れる時に戻す。
+const MODE_TOGGLE_PRIMARY_HOSTS = 2;
+let _modeToggleAway = false;
+const isShownOnScreen = (el) => !!el && el.isConnected && el.getClientRects().length > 0;
+
+// 置く所を決める。見える候補が無い時は:
+//  ・プレイヤーバーごと隠れている(まだ何も再生していない等) → 在る候補へ
+//    (無ければ置かない)。誰も使えない時にボタンだけ浮いて出ないように。
+//  ・プレイヤーバーは見えているのに置き場所が見えない/無い → 画面の隅に浮かせる。
+//    バーへ直に足すのはやめた: バーの並べ方次第で見切れたり重なったりする。
+//  ・プレイヤーバーが見つからない(要素名が変わった等) → 再生中なら浮かせる。
+const pickModeToggleHost = () => {
+  let firstExisting = null;
+  for (let i = 0; i < MODE_TOGGLE_HOSTS.length; i++) {
+    const [selector, how] = MODE_TOGGLE_HOSTS[i];
+    const el = document.querySelector(selector);
+    if (!el) continue;
+    const primary = i < MODE_TOGGLE_PRIMARY_HOSTS;
+    if (isShownOnScreen(el)) return { el, how, primary };
+    if (!firstExisting) firstExisting = { el, how, primary };
+  }
+  const bar = document.querySelector('ytmusic-player-bar');
+  const barHidden = bar ? !isShownOnScreen(bar) : !isPlayingSomething();
+  if (barHidden) return firstExisting;
+  return { el: document.body, how: 'float', primary: false };
+};
+const isPlayingSomething = () => {
+  const v = document.querySelector('video');
+  return !!(v && (v.currentSrc || v.src));
+};
+
+const placeModeToggle = (btn, host) => {
+  const floating = host.how === 'float';
+  _modeToggleAway = !host.primary;
+  btn.classList.toggle(MODE_TOGGLE_FLOATING_CLASS, floating);
+  if (floating) {
+    if (btn.parentElement !== document.body) document.body.appendChild(btn);
+  } else if (btn.parentElement !== host.el) {
+    if (host.how === 'prepend') host.el.prepend(btn);
+    else host.el.appendChild(btn);
+  }
+};
+
+const toggleImmersionMode = () => {
+  config.mode = !config.mode;
+  document.body.classList.toggle('ytm-custom-layout', config.mode);
+  if (isYTMPremiumUser()) changeIModeUIWithMovieMode(config.mode);
+  const btn = document.getElementById('my-mode-toggle');
+  if (btn) btn.classList.toggle('active', config.mode);
+  // 閉じている間に曲が変わっていたら、開いた瞬間に今の曲へ合わせる。
+  // このボタンは監視の対象外(#right-controls)なので、自分で頼まないと
+  // 次にプレイヤーバーが動くまで(たいてい次の曲まで)前の曲が出ていた。
+  requestImmersionTick();
+};
+
+// 置き場所が CSS で隠された(要素は残っている)ことは、見張りでは測らず
+// ブラウザに知らせてもらう。見えなくなった時だけ置き場所を選び直す。
+// プレイヤーバーごと隠れた時も知らせは来るが、その時は選び直しても
+// 同じ所に留まる(pickModeToggleHost)。
+let _modeToggleVisibilityObserver = null;
+const watchModeToggleVisibility = (btn) => {
+  if (typeof IntersectionObserver !== 'function') return;
+  _modeToggleVisibilityObserver?.disconnect();
+  _modeToggleVisibilityObserver = new IntersectionObserver((entries) => {
+    if (entries.some(e => !e.isIntersecting)) ensureModeToggle(true);
+  });
+  _modeToggleVisibilityObserver.observe(btn);
+};
+
+// tick からは recheck=false で呼ぶ(ボタンが在れば状態を合わせるだけ。
+// 変化のたびに位置を測ると重い)。置き場所の見直しは見張り(recheck=true)が行う。
+const ensureModeToggle = (recheck) => {
+  let btn = document.getElementById('my-mode-toggle');
+  if (btn && btn.isConnected && !recheck) {
+    const isActive = btn.classList.contains('active');
+    if (config.mode !== isActive) btn.classList.toggle('active', config.mode);
+    return btn;
+  }
+  const host = pickModeToggleHost();
+  if (!host) return btn;
+  if (!btn) {
+    btn = createEl('button', 'my-mode-toggle', '', 'IMMERSION');
+    btn.type = 'button';
+    btn.onclick = toggleImmersionMode;
+    watchModeToggleVisibility(btn);
+  }
+  btn.classList.toggle('active', !!config.mode);
+  // 見える置き場所に収まっていれば、より前の候補が現れた時だけ移す。
+  // 浮いている・外れている・置き場所ごと隠れた時は、選んだ所へ置き直す。
+  const parent = btn.parentElement;
+  const settled = btn.isConnected && !btn.classList.contains(MODE_TOGGLE_FLOATING_CLASS)
+    && isShownOnScreen(parent);
+  if (!settled || (host.how !== 'float' && host.el !== parent)) placeModeToggle(btn, host);
+  return btn;
+};
+
 const tick = async () => {
   // Update PIP window state (throttled to once per second)
   if (PipManager && PipManager.pipWindow) {
@@ -9588,33 +9696,7 @@ const tick = async () => {
   setAdPlayingState(adPlaying);
   if (adPlaying) return;
 
-  let toggleBtn = document.getElementById('my-mode-toggle');
-
-  if (!toggleBtn) {
-    const rc = document.querySelector('.right-controls-buttons');
-    if (rc) {
-      toggleBtn = createEl('button', 'my-mode-toggle', '', 'IMMERSION');
-
-      if (config.mode) toggleBtn.classList.add('active');
-
-      toggleBtn.onclick = () => {
-        config.mode = !config.mode;
-        document.body.classList.toggle('ytm-custom-layout', config.mode);
-        if (isYTMPremiumUser()) changeIModeUIWithMovieMode(config.mode);
-
-        toggleBtn.classList.toggle('active', config.mode);
-        // 閉じている間に曲が変わっていたら、開いた瞬間に今の曲へ合わせる。
-        // このボタンは監視の対象外(#right-controls)なので、自分で頼まないと
-        // 次にプレイヤーバーが動くまで(たいてい次の曲まで)前の曲が出ていた。
-        requestImmersionTick();
-      };
-      rc.prepend(toggleBtn);
-    }
-  } else {
-    const isActive = toggleBtn.classList.contains('active');
-    if (config.mode && !isActive) toggleBtn.classList.add('active');
-    else if (!config.mode && isActive) toggleBtn.classList.remove('active');
-  }
+  ensureModeToggle(false);
 
   const layout = _cachedLayoutEl || (_cachedLayoutEl = document.querySelector('ytmusic-app-layout'));
   const isPlayerOpen = layout?.hasAttribute('player-page-open');
@@ -10171,7 +10253,37 @@ CloudSync.init();
 YTMLog.log('YTM Immersion loaded.');
 
 
+// IMMERSION ボタンと監視の見張り。YTM がプレイヤーバーを作り直したり
+// ボタンを消したりしても、次の見張りで元に戻す。
+// 普段は「ページから外れていないか」を 2 つ読むだけで、要素を探したり
+// 位置を測ったり(レイアウトの計算を起こす)はしない。それをするのは
+// ボタンが消えた・本来の置き場所の外にいる、という異常な時だけ。
+const MODE_TOGGLE_WATCH_MS = 1500;
+let _modeToggleWatchTimer = null;
+let _barObserver = null;
+let _observedBar = null;
+const watchModeToggle = () => {
+  if (document.hidden) return;
+  const btn = document.getElementById('my-mode-toggle');
+  if (!btn || !btn.isConnected || _modeToggleAway) {
+    ensureModeToggle(true);
+  }
+  if (_observedBar && !_observedBar.isConnected) {
+    // 監視していたプレイヤーバーが差し替わった。古い方はもう何も知らせない。
+    _barObserver?.disconnect();
+    _barObserver = null;
+    _observedBar = null;
+    setupObserver();
+  } else if (!_observedBar && config.mode) {
+    // プレイヤーバーが見つからず監視を組めない間も、開いていれば追い続ける
+    requestImmersionTick();
+  }
+};
+
 const setupObserver = () => {
+  if (_modeToggleWatchTimer === null) {
+    _modeToggleWatchTimer = setInterval(watchModeToggle, MODE_TOGGLE_WATCH_MS);
+  }
 
   const targetNode = document.querySelector('ytmusic-player-bar');
 
@@ -10231,6 +10343,8 @@ const setupObserver = () => {
 
 
 
+  _barObserver = observer;
+  _observedBar = targetNode;
   observer.observe(targetNode, {
     attributes: true,
     childList: true,

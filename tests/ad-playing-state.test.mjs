@@ -107,7 +107,7 @@ test('歌詞のループは広告の時刻で歌詞を塗らない', () => {
 })
 
 test('tick は広告の状態を反映してから戻る', () => {
-  const tick = sliceBetween('const tick = async () => {', 'let toggleBtn')
+  const tick = sliceBetween('const tick = async () => {', 'ensureModeToggle(false);')
   assert.match(tick, /setAdPlayingState\(adPlaying\);\s*if \(adPlaying\) return;/)
 })
 

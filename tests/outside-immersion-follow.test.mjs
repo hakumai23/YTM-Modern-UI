@@ -84,7 +84,8 @@ test('PiP が開いていれば、Immersion の外でも曲の切り替わりま
 })
 
 test('IMMERSION ボタンで開いた時に、今の曲へ合わせ直す', () => {
-  const onclick = tickSource.slice(tickSource.indexOf('toggleBtn.onclick = () => {'), tickSource.indexOf('rc.prepend(toggleBtn);'))
+  const onclick = uiSource.slice(uiSource.indexOf('const toggleImmersionMode = () => {'), uiSource.indexOf('const ensureModeToggle ='))
+  assert.match(uiSource, /btn\.onclick = toggleImmersionMode;/)
   assert.match(onclick, /requestImmersionTick\(\);/)
   assert.match(uiSource, /requestImmersionTick = scheduleTick;/)
 })

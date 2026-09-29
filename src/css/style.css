@@ -4223,6 +4223,22 @@ a.settings-link-btn svg {
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
+/* 置き場所が見つからない時の予備。YTM がプレイヤーバーの作りを変えても
+   Immersion を開く入口を残す(lyrics-ui.js の pickModeToggleHost)。 */
+#my-mode-toggle.ytm-mode-toggle-floating {
+  position: fixed;
+  right: 16px;
+  bottom: 88px;
+  z-index: 2147483000;
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.85);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
 #my-mode-toggle.active {
   background: #fff !important;
   color: #000 !important;
