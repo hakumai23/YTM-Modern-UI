@@ -52,6 +52,9 @@ test('Immersion 中は新しいバーも浮いた角丸のバーにし、Immersi
   const body = rule.slice(0, rule.indexOf('}'))
   assert.match(body, /position: fixed !important;/)
   assert.match(body, /z-index: 2000 !important;/)
+  // 音量の縦スライダー・シークバーのつまみ・ホバーの時刻はバーの外へはみ出す。切り取ると使えない
+  assert.match(body, /overflow: visible !important;/)
+  assert.doesNotMatch(body, /overflow: hidden/)
   // 曲の情報は Immersion 側に出ているので隠し、YTM が狭い幅で隠す時刻は出す
   assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicMiniPlayerTrackInfo \{\s*display: none !important;/)
   assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicMiniPlayerTimeInfo \{\s*display: block !important;/)

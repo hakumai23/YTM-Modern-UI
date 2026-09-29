@@ -2200,7 +2200,10 @@ body.ytm-custom-layout ytmusic-miniplayer {
   z-index: 2000 !important;
   visibility: visible !important;
   opacity: 1 !important;
-  overflow: hidden !important;
+  /* 切り取らない。音量の縦スライダー・シークバーのつまみ・ホバーの時刻は
+     バーの外へはみ出して出るので、hidden にすると切れて使えなくなる(実機)。
+     旧バーのような「中身が収まらず切れる」問題は、3 列のグリッドなので起きない。 */
+  overflow: visible !important;
 }
 
 body.ytm-custom-layout ytmusic-miniplayer.moviemode {
