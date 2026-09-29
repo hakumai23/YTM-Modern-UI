@@ -43,7 +43,7 @@
     // 「この 2 つは同じ人」という対応表を残す。対応表があれば、すでに
     // ローマ字で入っている過去の履歴も後から束ねられる。
     _readBylineArtist: function () {
-      const el = document.querySelector('.byline.style-scope.ytmusic-player-bar');
+      const el = document.querySelector('.byline.style-scope.ytmusic-player-bar, ytmusic-miniplayer .ytmusicTrackInfoByline');
       if (!el) return '';
       return parseBylineArtist(el.textContent || '').trim();
     },

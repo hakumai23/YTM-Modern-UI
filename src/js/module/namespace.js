@@ -128,6 +128,9 @@ const normalizeSearchTrackTitle = (s) => {
     const waitForPlayerBar = () => {
       const playerBar = document.querySelector('ytmusic-player-bar');
       const progressBar = document.querySelector('tp-yt-paper-slider#progress-bar');
+      // 新しいバー(ytmusic-miniplayer)のシークバーは普通の input で、切れる丸ポチが無い。
+      // 旧バーは現れないので、待ち続けずにやめる。
+      if (!playerBar && document.querySelector('ytmusic-miniplayer')) return;
       if (!playerBar || !progressBar) {
         setTimeout(waitForPlayerBar, 500);
         return;

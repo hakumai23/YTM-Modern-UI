@@ -31,6 +31,7 @@ const loadSettle = () => {
     clearTimeout: () => {},
     requestImmersionTick: () => {},
     currentLyricsVideoId: 'old',
+    PLAYER_BAR_TITLE_SELECTOR: 'title',
   })
   vm.runInContext(
     `${sliceBetween('const META_SETTLE_MAX_MS', 'let _cachedLayoutEl = null;')}

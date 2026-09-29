@@ -2175,6 +2175,65 @@ body.ytm-custom-layout ytmusic-player-bar.inactive.moviemode {
   pointer-events: none !important;
 }
 
+/* 作り直された新しいプレイヤーバー(ytmusic-miniplayer)。一部の人にだけ
+   ytmusic-player-bar の代わりに出る。旧バーと同じく浮いた角丸のバーにする。
+   何もしないと画面下に張り付いたまま Immersion の下に潜り、再生や曲送りが
+   できなくなっていた。中は 3 列のグリッド(左: 曲の情報 / 中: 操作 / 右: 時刻・音量)。 */
+body.ytm-custom-layout ytmusic-miniplayer {
+  position: fixed !important;
+  top: auto !important;
+  bottom: 40px !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  width: 95% !important;
+  max-width: min(calc(1000px * var(--ytm-ui-scale)), 95vw) !important;
+  height: calc(80px * var(--ytm-ui-scale)) !important;
+  grid-template-rows: 100% !important;
+  align-items: center !important;
+  box-sizing: border-box !important;
+  border-radius: calc(40px * var(--ytm-ui-scale)) !important;
+  background: rgba(20, 20, 20, 0.9) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
+  padding: 0 min(calc(32px * var(--ytm-ui-scale)), 4vw) !important;
+  z-index: 2000 !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  overflow: hidden !important;
+}
+
+body.ytm-custom-layout ytmusic-miniplayer.moviemode {
+  background: rgba(0, 0, 0, 0.8) !important;
+  width: 98% !important;
+  max-width: min(calc(1200px * var(--ytm-ui-scale)), 98vw) !important;
+}
+
+/* 曲名とジャケットは Immersion 側に大きく出ているので、バーでは出さない(旧バーと同じ) */
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerTrackInfo {
+  display: none !important;
+}
+
+/* シークバーは上端いっぱいに付いている。角丸で両端が切れないよう内側へ寄せる */
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {
+  left: calc(40px * var(--ytm-ui-scale)) !important;
+  right: calc(40px * var(--ytm-ui-scale)) !important;
+  width: auto !important;
+  top: 2px !important;
+}
+
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerRightSection {
+  min-width: 0 !important;
+  padding-right: 0 !important;
+}
+
+/* YTM は幅 1200px 以下で時刻を隠す。旧バーの Immersion では出ていたので出す */
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerTimeInfo {
+  display: block !important;
+  white-space: nowrap !important;
+  color: #fff !important;
+}
+
 /* 蟾ｦ蛛ｴ繧ｳ繝ｳ繝医Ο繝ｼ繝ｫ */
 body.ytm-custom-layout .left-controls {
   flex: 0 0 auto !important;

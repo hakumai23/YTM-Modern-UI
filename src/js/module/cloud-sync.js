@@ -501,7 +501,7 @@
     const targets = [];
     const title = ui.title;
     const artist = ui.artist;
-    const playerBar = document.querySelector("ytmusic-player-bar");
+    const playerBar = document.querySelector("ytmusic-player-bar, ytmusic-miniplayer");
     const switcher = document.querySelector("ytmusic-av-toggle");
     if (title) targets.push(title);
     if (artist) targets.push(artist);

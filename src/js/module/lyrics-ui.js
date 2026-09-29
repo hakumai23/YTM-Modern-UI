@@ -1,3 +1,13 @@
+// プレイヤーバー。YTM は 2026-09 から一部の人に、ytmusic-player-bar の
+// 代わりに作り直したバー(ytmusic-miniplayer、試験スイッチ
+// music_web_enable_wiz_miniplayer)を出している。どちらか在る方を使う。
+const PLAYER_BAR_SELECTOR = 'ytmusic-player-bar, ytmusic-miniplayer';
+const PLAYER_BAR_TITLE_SELECTOR = 'yt-formatted-string.title.style-scope.ytmusic-player-bar, ytmusic-miniplayer .ytmusicTrackInfoTitle';
+const PLAYER_BAR_BYLINE_SELECTOR = '.byline.style-scope.ytmusic-player-bar, ytmusic-miniplayer .ytmusicTrackInfoByline';
+// 再生中ずっと動く所(シークバー・時刻・右側の列)。ここの変化では tick を起こさない。
+const PLAYER_BAR_NOISE_SELECTOR = 'tp-yt-paper-slider, tp-yt-paper-progress, #left-controls, #right-controls, .time-info, '
+  + '.ytMusicMiniPlayerProgressBarWrapper, .ytMusicMiniPlayerTimeInfo, .ytMusicMiniPlayerRightSection';
+
 const resolveDeepLTargetLang = (lang) => {
   switch ((lang || '').toLowerCase()) {
     case 'en': case 'en-us': case 'en-gb': return 'EN';
@@ -1473,7 +1483,7 @@ const observerMovieModeSetup = () => {
     const pusher = (element) => {
       if (element instanceof Element) classTargets.push(element);
     };
-    const playerBar = document.querySelector("ytmusic-player-bar");
+    const playerBar = document.querySelector(PLAYER_BAR_SELECTOR);
     pusher(playerBar);
     pusher(switcher);
     const video = document.querySelector("ytmusic-player#player");
@@ -1908,8 +1918,8 @@ const getMetadata = () => {
   }
 
   // Fallback: read from player bar
-  const tEl = document.querySelector('yt-formatted-string.title.style-scope.ytmusic-player-bar');
-  const aEl = document.querySelector('.byline.style-scope.ytmusic-player-bar');
+  const tEl = document.querySelector(PLAYER_BAR_TITLE_SELECTOR);
+  const aEl = document.querySelector(PLAYER_BAR_BYLINE_SELECTOR);
   if (!(tEl && aEl)) return null;
 
   const parts = splitBylineParts(aEl.textContent);
@@ -1939,7 +1949,9 @@ const extractVideoIdFromHref = (href) => {
 const getCurrentVideoIdFromDom = () => {
   const selectors = [
     'ytmusic-player-bar yt-formatted-string.title a[href*="watch"]',
-    'ytmusic-player-bar a[href*="watch?v="]'
+    'ytmusic-player-bar a[href*="watch?v="]',
+    'ytmusic-miniplayer .ytmusicTrackInfoTitle a[href*="watch"]',
+    'ytmusic-miniplayer a[href*="watch?v="]'
   ];
 
   for (const selector of selectors) {
@@ -9500,7 +9512,7 @@ function updateLyricHighlight(currentTime) {
 }
 
 function setupPlayerBarBlankClickGuard() {
-  const bar = document.querySelector('ytmusic-player-bar');
+  const bar = document.querySelector(PLAYER_BAR_SELECTOR);
   if (!bar || bar.dataset.ytmBlankClickGuard === '1') return;
   bar.dataset.ytmBlankClickGuard = '1';
 
@@ -9553,7 +9565,7 @@ const shouldWaitForSettledMetadata = (meta, videoId) => {
     _metaSettleVideoId = '';
     return false;
   }
-  const barTitle = document.querySelector('yt-formatted-string.title.style-scope.ytmusic-player-bar')?.textContent;
+  const barTitle = document.querySelector(PLAYER_BAR_TITLE_SELECTOR)?.textContent;
   if (titlesAgree(barTitle, meta.title)) {
     _metaSettleVideoId = '';
     return false;
@@ -9581,13 +9593,15 @@ let requestImmersionTick = () => { void tick(); };
 const MODE_TOGGLE_HOSTS = [
   ['ytmusic-player-bar .right-controls-buttons', 'prepend'],
   ['.right-controls-buttons', 'prepend'],
+  ['ytmusic-miniplayer .ytMusicMiniPlayerRightSection', 'prepend'],
   ['ytmusic-player-bar .right-controls', 'prepend'],
   ['ytmusic-player-bar #right-controls', 'prepend'],
 ];
 const MODE_TOGGLE_FLOATING_CLASS = 'ytm-mode-toggle-floating';
-// 本来の置き場所(先頭 2 つはどちらも .right-controls-buttons)以外に
-// いる間は、見張りが毎回選び直して、戻れる時に戻す。
-const MODE_TOGGLE_PRIMARY_HOSTS = 2;
+// 本来の置き場所(先頭 2 つは旧バーの .right-controls-buttons、
+// 3 つ目は新バーの右側の列)以外にいる間は、見張りが毎回選び直して、
+// 戻れる時に戻す。
+const MODE_TOGGLE_PRIMARY_HOSTS = 3;
 let _modeToggleAway = false;
 const isShownOnScreen = (el) => !!el && el.isConnected && el.getClientRects().length > 0;
 
@@ -9607,7 +9621,7 @@ const pickModeToggleHost = () => {
     if (isShownOnScreen(el)) return { el, how, primary };
     if (!firstExisting) firstExisting = { el, how, primary };
   }
-  const bar = document.querySelector('ytmusic-player-bar');
+  const bar = document.querySelector(PLAYER_BAR_SELECTOR);
   const barHidden = bar ? !isShownOnScreen(bar) : !isPlayingSomething();
   if (barHidden) return firstExisting;
   return { el: document.body, how: 'float', primary: false };
@@ -10039,7 +10053,7 @@ function updateMetaUI(meta) {
     // 待っている間に次の曲へ進んでいたら、その曲の分は向こうに任せる。
     // 続けると、新しい曲のアーティスト名を前の曲の題名の下に書いてしまう。
     if (currentKey !== keyAtStart) return;
-    const bylineWrapper = document.querySelector('ytmusic-player-bar yt-formatted-string.byline.complex-string');
+    const bylineWrapper = document.querySelector('ytmusic-player-bar yt-formatted-string.byline.complex-string, ytmusic-miniplayer .ytmusicTrackInfoByline');
     if (!bylineWrapper) {
       retryCount++;
       if (retryCount < maxRetries) {
@@ -10051,7 +10065,7 @@ function updateMetaUI(meta) {
     }
 
     const artistLinks = Array.from(
-      bylineWrapper.querySelectorAll('a.yt-simple-endpoint')
+      bylineWrapper.querySelectorAll('a.yt-simple-endpoint, a.ytAttributedStringLink')
     ).filter(a => {
       const href = a.href || '';
       return href.includes('channel/') || href.includes('/channel/');
@@ -10285,7 +10299,7 @@ const setupObserver = () => {
     _modeToggleWatchTimer = setInterval(watchModeToggle, MODE_TOGGLE_WATCH_MS);
   }
 
-  const targetNode = document.querySelector('ytmusic-player-bar');
+  const targetNode = document.querySelector(PLAYER_BAR_SELECTOR);
 
 
   if (!targetNode) {
@@ -10330,7 +10344,7 @@ const setupObserver = () => {
     const hasRelevantMutation = mutations.some(mutation => {
       const target = mutation.target;
       if (!target) return false;
-      if (target.closest && target.closest('tp-yt-paper-slider, tp-yt-paper-progress, #left-controls, #right-controls, .time-info')) {
+      if (target.closest && target.closest(PLAYER_BAR_NOISE_SELECTOR)) {
         return false;
       }
       return true;

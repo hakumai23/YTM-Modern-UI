@@ -476,7 +476,7 @@ pipDoc.body.innerHTML = `
       });
 
       prevBtn.addEventListener('click', () => {
-        const prevWrapper = document.querySelector('ytmusic-player-bar .previous-button') || document.querySelector('ytmusic-player-bar [aria-label="前へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Previous track"]');
+        const prevWrapper = document.querySelector('ytmusic-player-bar .previous-button, ytmusic-miniplayer .ytmusicPlayerControlsPreviousButton') || document.querySelector('ytmusic-player-bar [aria-label="前へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Previous track"]');
         if (prevWrapper) {
           const btn = prevWrapper.querySelector('button') || prevWrapper.querySelector('tp-yt-paper-icon-button') || prevWrapper;
           btn.click();
@@ -484,7 +484,7 @@ pipDoc.body.innerHTML = `
       });
 
       playBtn.addEventListener('click', () => {
-        const wrapper = document.querySelector('ytmusic-player-bar #play-pause-button') || document.querySelector('ytmusic-player-bar .play-pause-button');
+        const wrapper = document.querySelector('ytmusic-player-bar #play-pause-button, ytmusic-miniplayer .ytmusicPlayerControlsPlayPauseButton') || document.querySelector('ytmusic-player-bar .play-pause-button');
         if (wrapper) {
           const btn = wrapper.querySelector('button') || wrapper.querySelector('tp-yt-paper-icon-button') || wrapper;
           btn.click();
@@ -495,7 +495,7 @@ pipDoc.body.innerHTML = `
       });
 
       nextBtn.addEventListener('click', () => {
-        const nextWrapper = document.querySelector('ytmusic-player-bar .next-button') || document.querySelector('ytmusic-player-bar [aria-label="次へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Next track"]');
+        const nextWrapper = document.querySelector('ytmusic-player-bar .next-button, ytmusic-miniplayer .ytmusicPlayerControlsNextButton') || document.querySelector('ytmusic-player-bar [aria-label="次へ"]') || document.querySelector('ytmusic-player-bar [aria-label="Next track"]');
         if (nextWrapper) {
           const btn = nextWrapper.querySelector('button') || nextWrapper.querySelector('tp-yt-paper-icon-button') || nextWrapper;
           btn.click();

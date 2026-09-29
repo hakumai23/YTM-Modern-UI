@@ -18,9 +18,9 @@ const pickSrc = ui.slice(ui.indexOf('const MODE_TOGGLE_HOSTS = ['), ui.indexOf('
 const el = (name, shown = true) => ({ name, isConnected: true, getClientRects: () => (shown ? [{}] : []) })
 const pickWith = (nodes) => {
   const document = { querySelector: (s) => nodes[s] || null, body: el('body') }
-  const pick = new Function('document', `${pickSrc}\nreturn pickModeToggleHost;`)(document)
+  const pick = new Function('document', 'PLAYER_BAR_SELECTOR', `${pickSrc}\nreturn pickModeToggleHost;`)(document, 'ytmusic-player-bar')
   const host = pick()
-  return host && { name: host.el.name, how: host.how }
+  return host && { name: host.el.name, how: host.how, ...(host.primary && host.el.name === 'right' ? { primary: true } : {}) }
 }
 
 test('今の作りでは .right-controls-buttons の先頭に入れる', () => {
@@ -38,6 +38,13 @@ test('.right-controls-buttons が無くなっても右側の操作列に入れ�
     'ytmusic-player-bar .right-controls': el('rc'),
     'ytmusic-player-bar': el('bar'),
   }), { name: 'rc', how: 'prepend' })
+})
+
+test('新しいバー(ytmusic-miniplayer)では右側の列の先頭に入れる', () => {
+  assert.deepEqual(pickWith({
+    'ytmusic-miniplayer .ytMusicMiniPlayerRightSection': el('right'),
+    'ytmusic-player-bar': null,
+  }), { name: 'right', how: 'prepend', primary: true })
 })
 
 test('置き場所が隠れていれば次の候補へ、見える所が無ければ浮かせる', () => {
