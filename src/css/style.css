@@ -220,6 +220,12 @@ body.ytm-custom-layout #ytm-custom-wrapper {
   display: flex !important;
 }
 
+/* 閲覧ページの上で開いた時(ボタン・ツールバーのアイコン・ショートカット)、
+   下のページのスクロールバーが右端に透けて見えないようにする */
+html:has(> body.ytm-custom-layout) {
+  scrollbar-width: none;
+}
+
 body.ytm-custom-layout.ytm-no-lyrics #my-lyrics-container {
   display: none !important;
 }
@@ -254,16 +260,49 @@ body.ytm-custom-layout.ytm-no-lyrics #ytm-custom-left-col.moviemode {
   transform: none;
 }
 
-body.ytm-custom-layout #player-bar-background,
-body.ytm-custom-layout #guide-wrapper,
-body.ytm-custom-layout ytmusic-mini-guide-renderer,
-body.ytm-custom-layout #browse-page,
-body.ytm-custom-layout #player-page,
-body.ytm-custom-layout #main-panel,
-body.ytm-custom-layout .side-panel {
+body.ytm-custom-layout #player-bar-background:not([data-ytmi-bar-path]),
+body.ytm-custom-layout #guide-wrapper:not([data-ytmi-bar-path]),
+body.ytm-custom-layout ytmusic-mini-guide-renderer:not([data-ytmi-bar-path]),
+body.ytm-custom-layout #browse-page:not([data-ytmi-bar-path]),
+body.ytm-custom-layout #player-page:not([data-ytmi-bar-path]),
+body.ytm-custom-layout #main-panel:not([data-ytmi-bar-path]),
+body.ytm-custom-layout .side-panel:not([data-ytmi-bar-path]) {
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
+}
+
+/* プレイヤーバーの祖先(player-bar.js が data-ytmi-bar-path を付ける)。
+   YTM がバーを上の隠す対象の中へ移しても、バーごと消えないようにする。
+   ・透明にはしない(opacity は子で打ち消せない)。隠すのは visibility だけにし、
+     バーの側で visible に戻す
+   ・重なりの箱(stacking context)を作る指定を外す。作られていると、バーの
+     z-index は箱の中でしか効かず、Immersion の全面の層の下に閉じ込められる。
+     transform 等は position:fixed の基準も変えてしまうので、あわせて外す。
+     外せない箱(見えている入れ物が position:fixed 等)に閉じ込められた時は、
+     player-bar.js が押せないことに気づいて自前のバーを出す
+   今の作り(祖先は ytmusic-app-layout と ytmusic-app)では、どれも元から
+   この値なので何も変わらない。 */
+body.ytm-custom-layout :is(#player-bar-background, #guide-wrapper, ytmusic-mini-guide-renderer, #browse-page, #player-page, #main-panel, .side-panel)[data-ytmi-bar-path] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  /* position:fixed の入れ物(#player-page など)は z-index を外しても
+     重なりの箱を作る。中身は見えず押せもしないので、箱ごとバーの高さへ
+     持ち上げる(実機: #player-page へ移したバーが層の下に潜った) */
+  z-index: 2000 !important;
+}
+
+body.ytm-custom-layout [data-ytmi-bar-path] {
+  opacity: 1 !important;
+  transform: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  perspective: none !important;
+  clip-path: none !important;
+  mask: none !important;
+  contain: none !important;
+  will-change: auto !important;
+  z-index: auto !important;
 }
 
 
@@ -2173,6 +2212,415 @@ body.ytm-custom-layout ytmusic-player-bar.inactive.moviemode {
   opacity: 0 !important;
   visibility: hidden !important;
   pointer-events: none !important;
+}
+
+/* どの作りのバーでも押せるように。祖先で pointer-events:none を
+   受け継いでいても、バーの中は押せる */
+body.ytm-custom-layout [data-ytmi-bar] {
+  pointer-events: auto !important;
+}
+
+/* YTM が「プレイヤーページを開いている間はバーを display:none にする」
+   作りに変えても出せるよう、見えていた時の display(player-bar.js が
+   --ytmi-bar-display に控える)で出す。旧バーは下の指定で flex に決めている。 */
+body.ytm-custom-layout :is([data-ytmi-bar="wiz"], [data-ytmi-bar="generic"])[style*="--ytmi-bar-display"] {
+  display: var(--ytmi-bar-display) !important;
+}
+
+/* 知らない作りのバー(player-bar.js が形で見つけたもの)。中の並びは
+   分からないので、外枠だけ旧バーと同じ浮いた角丸にして、Immersion の上に出す。 */
+body.ytm-custom-layout [data-ytmi-bar="generic"] {
+  position: fixed !important;
+  top: auto !important;
+  bottom: 40px !important;
+  left: 50% !important;
+  right: auto !important;
+  transform: translateX(-50%) !important;
+  width: 95% !important;
+  max-width: min(calc(1000px * var(--ytm-ui-scale)), 95vw) !important;
+  min-height: calc(64px * var(--ytm-ui-scale)) !important;
+  box-sizing: border-box !important;
+  border-radius: calc(32px * var(--ytm-ui-scale)) !important;
+  background: rgba(20, 20, 20, 0.9) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5) !important;
+  padding: 0 min(calc(32px * var(--ytm-ui-scale)), 4vw) !important;
+  z-index: 2000 !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  overflow: visible !important;
+}
+
+/* 自前のバー。YTM のバーが Immersion の中で押せない時だけ出る(player-bar.js)。
+   飾り(光・光沢・白い丸・浮いた吹き出し)は付けず、平らな面と文字と
+   アイコンだけにする。バーそのものが進み具合で、ジャケットの色
+   (--ytmi-tint)が再生に合わせて左から満ちる。角は Immersion の上の
+   ナビと同じ 20px。
+   GPU: 背景のすりガラスは使わない(動く背景を毎フレームぼかし直す)。
+   満ちていく色は transform だけで動かし、合成スレッドに任せる。 */
+#ytmi-fallback-bar {
+  display: none;
+}
+
+body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
+  --fb-s: var(--ytm-ui-scale, 1);
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 95%;
+  max-width: min(calc(1000px * var(--fb-s)), 95vw);
+  height: calc(72px * var(--fb-s));
+  box-sizing: border-box;
+  display: block;
+  border-radius: calc(20px * var(--fb-s));
+  background: rgba(20, 20, 22, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  color: #fff;
+  font-family: 'SF Pro Display', 'InterVariable', 'Noto Sans JP', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  contain: layout style;
+  z-index: 2001;
+  animation: ytmiFbIn 0.3s ease-out;
+}
+
+@keyframes ytmiFbIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px);
+  }
+}
+
+/* 満ちていく色。バーと同じ幅の層を左へずらしておき、右へ戻していく。
+   右の縁の細い線が今の位置 */
+#ytmi-fallback-bar .ytmi-fb-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-fill {
+  position: absolute;
+  inset: 0;
+  background-color: rgba(255, 255, 255, 0.1);
+  box-shadow: inset -2px 0 0 rgba(255, 255, 255, 0.6);
+  transform: translateX(-100%);
+  will-change: transform;
+  transition: background-color 0.8s ease;
+}
+
+:root[style*="--ytmi-tint"] #ytmi-fallback-bar .ytmi-fb-fill {
+  background-color: rgb(var(--ytmi-tint));
+}
+
+/* まだ満ちていない所も同じ色をごく薄く混ぜ、バー全体を曲の色でまとめる */
+:root[style*="--ytmi-tint"] body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
+  background:
+    linear-gradient(rgba(var(--ytmi-tint), 0.22), rgba(var(--ytmi-tint), 0.22)),
+    rgba(20, 20, 22, 0.8);
+}
+
+/* ボタン以外の所は全部シークの的。乗せると縦線と時刻が出る */
+#ytmi-fallback-bar .ytmi-fb-scrub {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-hover {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.55);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: #fff;
+  color: #111;
+  font-size: calc(12px * var(--fb-s));
+  font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-scrub:hover .ytmi-fb-hover,
+#ytmi-fallback-bar .ytmi-fb-scrub:hover .ytmi-fb-tip,
+#ytmi-fallback-bar.is-scrubbing .ytmi-fb-hover,
+#ytmi-fallback-bar.is-scrubbing .ytmi-fb-tip {
+  opacity: 1;
+}
+
+#ytmi-fallback-bar .ytmi-fb-scrub:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.8);
+  outline-offset: 2px;
+}
+
+/* 長さが分からない間(読み込み中・生配信)はシークさせない */
+#ytmi-fallback-bar.ytmi-fb-no-duration .ytmi-fb-scrub {
+  pointer-events: none;
+}
+
+/* ── 並び ── */
+#ytmi-fallback-bar .ytmi-fb-row {
+  position: relative;
+  z-index: 2;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: calc(16px * var(--fb-s));
+  padding: 0 calc(12px * var(--fb-s));
+  pointer-events: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-row button,
+#ytmi-fallback-bar .ytmi-fb-volume {
+  pointer-events: auto;
+}
+
+#ytmi-fallback-bar .ytmi-fb-transport,
+#ytmi-fallback-bar .ytmi-fb-right {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: calc(2px * var(--fb-s));
+}
+
+#ytmi-fallback-bar .ytmi-fb-btn {
+  width: calc(40px * var(--fb-s));
+  height: calc(40px * var(--fb-s));
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: calc(10px * var(--fb-s));
+  background: transparent;
+  color: rgba(255, 255, 255, 0.86);
+  cursor: pointer;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+#ytmi-fallback-bar .ytmi-fb-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+#ytmi-fallback-bar .ytmi-fb-btn:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+#ytmi-fallback-bar .ytmi-fb-btn:focus-visible,
+#ytmi-fallback-bar .ytmi-fb-volslider:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.8);
+  outline-offset: 1px;
+}
+
+#ytmi-fallback-bar .ytmi-fb-btn[hidden] {
+  display: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-btn svg {
+  width: calc(20px * var(--fb-s));
+  height: calc(20px * var(--fb-s));
+  display: block;
+  pointer-events: none;
+}
+
+#ytmi-fallback-bar .ytmi-fb-play {
+  color: #fff;
+}
+
+#ytmi-fallback-bar .ytmi-fb-play svg {
+  width: calc(24px * var(--fb-s));
+  height: calc(24px * var(--fb-s));
+}
+
+/* 時刻。置き換わった直後の数秒だけ、ここに理由を文で出す */
+#ytmi-fallback-bar .ytmi-fb-center {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+#ytmi-fallback-bar .ytmi-fb-time,
+#ytmi-fallback-bar .ytmi-fb-notice {
+  font-size: calc(13px * var(--fb-s));
+  font-weight: 500;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: nowrap;
+  transition: opacity 0.3s ease;
+}
+
+#ytmi-fallback-bar .ytmi-fb-time {
+  font-variant-numeric: tabular-nums;
+}
+
+#ytmi-fallback-bar .ytmi-fb-notice {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+}
+
+#ytmi-fallback-bar.is-noticing .ytmi-fb-time {
+  opacity: 0;
+}
+
+#ytmi-fallback-bar.is-noticing .ytmi-fb-notice {
+  opacity: 1;
+}
+
+/* 音量。アイコンに乗せると左へスライダーが伸びる */
+#ytmi-fallback-bar .ytmi-fb-volume {
+  display: flex;
+  align-items: center;
+}
+
+#ytmi-fallback-bar .ytmi-fb-volslider {
+  position: relative;
+  width: 0;
+  height: calc(28px * var(--fb-s));
+  opacity: 0;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+  transition: width 0.2s ease, margin 0.2s ease, opacity 0.15s ease;
+}
+
+#ytmi-fallback-bar .ytmi-fb-volume:hover .ytmi-fb-volslider,
+#ytmi-fallback-bar .ytmi-fb-volume:focus-within .ytmi-fb-volslider,
+#ytmi-fallback-bar .ytmi-fb-volume.is-dragging .ytmi-fb-volslider {
+  width: calc(80px * var(--fb-s));
+  margin: 0 calc(6px * var(--fb-s)) 0 calc(4px * var(--fb-s));
+  opacity: 1;
+}
+
+#ytmi-fallback-bar .ytmi-fb-voltrack {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: calc(3px * var(--fb-s));
+  transform: translateY(-50%);
+  border-radius: 2px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#ytmi-fallback-bar .ytmi-fb-volfill {
+  width: 100%;
+  height: 100%;
+  background: #fff;
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+#ytmi-fallback-bar .ytmi-fb-toggle-slot {
+  display: flex;
+  align-items: center;
+  margin: 0 calc(6px * var(--fb-s));
+  pointer-events: auto;
+}
+
+#ytmi-fallback-bar #my-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: calc(28px * var(--fb-s));
+  padding: 0 calc(12px * var(--fb-s));
+  border-radius: calc(8px * var(--fb-s));
+  font-family: inherit;
+  font-size: calc(11px * var(--fb-s));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+#ytmi-fallback-bar #my-mode-toggle.active {
+  box-shadow: none;
+}
+
+/* 動きを減らす設定の人には、出入りや乗せた時の動きを付けない
+   (満ちていく色は再生位置そのものなので止めない) */
+@media (prefers-reduced-motion: reduce) {
+  body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
+    animation: none;
+  }
+
+  #ytmi-fallback-bar .ytmi-fb-row *,
+  #ytmi-fallback-bar .ytmi-fb-scrub *,
+  #ytmi-fallback-bar .ytmi-fb-fill {
+    transition: none !important;
+  }
+}
+
+/* 狭い画面(Immersion が縦積みになる幅)では、YTM のバーと同じ所に置く。
+   歌詞や見出しの逃げ場はこの位置に合わせてある。
+   (範囲の書き方にしているのは、狭い画面の本体のブロック(max-width の
+   書き方)と見分けるため。テストがそちらを目印に読む) */
+@media (width <= 900px) {
+  body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
+    width: calc(100% - 24px);
+    max-width: 640px;
+    bottom: 24px;
+  }
+}
+
+/* 狭い画面では、無くても困らないものから畳む */
+@media (max-width: 760px) {
+  #ytmi-fallback-bar [data-act="shuffle"] {
+    display: none;
+  }
+}
+
+@media (max-width: 560px) {
+  #ytmi-fallback-bar .ytmi-fb-volslider {
+    display: none;
+  }
+
+  #ytmi-fallback-bar .ytmi-fb-row {
+    gap: calc(8px * var(--fb-s));
+  }
+}
+
+@media (max-width: 420px) {
+  #ytmi-fallback-bar .ytmi-fb-volume,
+  #ytmi-fallback-bar .ytmi-fb-center {
+    display: none;
+  }
 }
 
 /* 作り直された新しいプレイヤーバー(ytmusic-miniplayer)。一部の人にだけ
@@ -4299,6 +4747,12 @@ a.settings-link-btn svg {
   color: #fff;
   cursor: pointer;
   backdrop-filter: blur(8px);
+}
+
+/* Immersion 中はバー(bottom 40px・高さ 80px × UI サイズ)の上に逃がす。
+   知らない作りのバーでは浮かせたまま使うので、バーの右端に重ならないように */
+body.ytm-custom-layout #my-mode-toggle.ytm-mode-toggle-floating {
+  bottom: calc(52px + 80px * var(--ytm-ui-scale));
 }
 
 #my-mode-toggle.active {

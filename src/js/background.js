@@ -146,6 +146,42 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// ── Immersion の入口(ツールバーのアイコン・ショートカット) ──
+// プレイヤーバーの IMMERSION ボタンは YTM の作り次第で出せないことがある。
+// こちらは YTM の画面と関係なく必ず押せる入口。
+//  ・YTM のタブで押した → そのタブで開く/閉じる
+//  ・別のタブで押した   → YTM のタブへ移って開く(無ければ YTM を開く)
+const YTM_ORIGIN = 'https://music.youtube.com/';
+const sendImmersionAction = async (tabId, action) => {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'YTMI_IMMERSION', action });
+  } catch (e) {
+    // 拡張を入れ直した直後など、ページを読み直すまで受け手がいない
+    YTMLog.log('Immersion の切り替えを届けられなかった:', e && e.message);
+  }
+};
+const openImmersionFrom = async (tab) => {
+  if (tab && tab.id != null && typeof tab.url === 'string' && tab.url.startsWith(YTM_ORIGIN)) {
+    await sendImmersionAction(tab.id, 'toggle');
+    return;
+  }
+  const [ytm] = await chrome.tabs.query({ url: `${YTM_ORIGIN}*` });
+  if (ytm) {
+    await chrome.tabs.update(ytm.id, { active: true });
+    await chrome.windows.update(ytm.windowId, { focused: true });
+    await sendImmersionAction(ytm.id, 'open');
+    return;
+  }
+  await chrome.tabs.create({ url: YTM_ORIGIN });
+};
+chrome.action?.onClicked.addListener((tab) => {
+  openImmersionFrom(tab).catch(e => console.warn('[YTM] Immersion を開けなかった', e));
+});
+chrome.commands?.onCommand.addListener((command, tab) => {
+  if (command !== 'toggle-immersion') return;
+  openImmersionFrom(tab).catch(e => console.warn('[YTM] Immersion を開けなかった', e));
+});
+
 chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
   if (!req || typeof req !== 'object' || !req.type) {
     return;

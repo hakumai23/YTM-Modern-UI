@@ -1,12 +1,16 @@
 // プレイヤーバー。YTM は 2026-09 から一部の人に、ytmusic-player-bar の
 // 代わりに作り直したバー(ytmusic-miniplayer、試験スイッチ
-// music_web_enable_wiz_miniplayer)を出している。どちらか在る方を使う。
-const PLAYER_BAR_SELECTOR = 'ytmusic-player-bar, ytmusic-miniplayer';
+// music_web_enable_wiz_miniplayer)を出している。バーそのものは
+// PlayerBar.get()(player-bar.js)で探す。知らない作りでも形で見つける。
+// 以下は、知っている作りの中から曲名などを読むためのもの(読めなければ
+// MediaSession で足りる)。
 const PLAYER_BAR_TITLE_SELECTOR = 'yt-formatted-string.title.style-scope.ytmusic-player-bar, ytmusic-miniplayer .ytmusicTrackInfoTitle';
 const PLAYER_BAR_BYLINE_SELECTOR = '.byline.style-scope.ytmusic-player-bar, ytmusic-miniplayer .ytmusicTrackInfoByline';
 // 再生中ずっと動く所(シークバー・時刻・右側の列)。ここの変化では tick を起こさない。
+// 最後の行は知らない作りのバー向け(どの作りでもシークバーはスライダー)。
 const PLAYER_BAR_NOISE_SELECTOR = 'tp-yt-paper-slider, tp-yt-paper-progress, #left-controls, #right-controls, .time-info, '
-  + '.ytMusicMiniPlayerProgressBarWrapper, .ytMusicMiniPlayerTimeInfo, .ytMusicMiniPlayerRightSection';
+  + '.ytMusicMiniPlayerProgressBarWrapper, .ytMusicMiniPlayerTimeInfo, .ytMusicMiniPlayerRightSection, '
+  + '[role="slider"], input[type="range"], progress';
 
 const resolveDeepLTargetLang = (lang) => {
   switch ((lang || '').toLowerCase()) {
@@ -1483,7 +1487,7 @@ const observerMovieModeSetup = () => {
     const pusher = (element) => {
       if (element instanceof Element) classTargets.push(element);
     };
-    const playerBar = document.querySelector(PLAYER_BAR_SELECTOR);
+    const playerBar = PlayerBar.get();
     pusher(playerBar);
     pusher(switcher);
     const video = document.querySelector("ytmusic-player#player");
@@ -2141,7 +2145,7 @@ const POINTER_IDLE_HIDE_MS = 2600;
 let pointerIdleTimer = null;
 // 手を置いたままでも届く mousemove がある。Chrome は scrollTop が動くと、
 // カーソルの下にある物が変わったかを取り直すために、同じ座標の mousemove を
-// 投げてくる。歌詞は行が変わるたびに毎フレーム scrollTop を書くので、画面の
+// 投げてくる。歌詞は行が変わるたびに scrollTop を書くので、画面の
 // 上にカーソルを置いたままにしていると、曲が続くかぎりそれが届き続け、
 // 「ずっと手を動かしている」ことになってバッジが引っ込まなかった。
 // 座標が動いた時だけ本物の操作として扱う。
@@ -3361,10 +3365,8 @@ function setupScrollResumeEvents() {
 
     isUserScrolling = true;
     isProgrammaticScrolling = false;
+    // 動いている途中の行は止めずに着地させる。止めると残りの距離を一度に跳ぶ。
     ui.lyrics._ytmResumeFadeAfterScroll = false;
-    ui.lyrics._scrollTarget = undefined;
-    ui.lyrics._scrollVel = 0;
-    resetLyricRowMotion(ui.lyrics);
     ui.lyrics.classList.add('ytm-user-browsing-lyrics');
     clearTimeout(userScrollTimeout);
     userScrollTimeout = setTimeout(() => {
@@ -6819,6 +6821,7 @@ function renderSettingsPanel() {
     if (uiLanguageChanged) {
       applyButtonLabels();
       applyLyricsSourceBadgeText();
+      PlayerBar.refresh();
       const replayWasActive = !!ui.replayPanel?.classList.contains('active');
       const replayRange = ui.replayPanel?.dataset?.range || 'day';
       if (ui.replayPanel) {
@@ -8560,172 +8563,267 @@ const restartLyricRafLoop = () => {
 window.restartLyricRafLoop = restartLyricRafLoop;
 
 // ── 行送りのスクロール ──────────────────────────────────
-// ブラウザ内蔵の smooth スクロールは、動いている途中で次の行が来ると
-// いまの動きを打ち切って新しい動きを始める。そこで速度が跳ねるので、
-// 行がつぎつぎ変わる所ほどつっかえて見える。
-// 自前のばねで動かすと、目標が変わっても今の速度のまま繋がる。
-// 行き過ぎて戻らないよう臨界減衰(damping = 2√stiffness)にしてある。
+// 行が変わったら scrollTop はその場で行き先へ飛ばし、見た目の動きは
+// 各行の translate で「さっきまでいた所」から 0 へ戻していく。
+// その動きは Web Animations に渡すので、合成スレッドが画面の更新に合わせて進める。
+//
+// 以前は rAF で毎フレーム scrollTop と各行の translate を書いていた。
+// ・ばねを performance.now() で進めていたので、コールバックが呼ばれる時刻の
+//   ぶれ(フレーム内で前に何が走ったか次第で数 ms)がそのまま移動量のぶれになった
+// ・scrollTop は画面の画素単位(Retina で 0.5px、等倍で 1px)に丸められるので、
+//   止まり際が段々になった
+// ・YTM 側が重いフレームでは歌詞も一緒に止まった
+// ・動いている間、毎フレーム 10〜30 行ぶんのスタイルを書き換えていた
+// 合成側で動かせばどれも起きない。メインスレッドの仕事は行が変わった時の1回だけ。
+//
+// ばねの形は以前のまま。ブラウザ内蔵の smooth スクロールは、動いている途中で
+// 次の行が来ると動きを打ち切って速度が跳ねるので使わない。こちらは目標が
+// 変わっても、式から出したその時点の位置と速度のまま繋ぐ。
+// 外側は行き過ぎて戻らないよう臨界減衰(damping = 2√stiffness)にしてある。
 const SCROLL_STIFFNESS = 120;
 const SCROLL_DAMPING = 2 * Math.sqrt(SCROLL_STIFFNESS);
 // これ以下になったら止める。残りコンマ数 px を延々と詰めない。
 const SCROLL_SETTLE_PX = 0.5;
 const SCROLL_SETTLE_VEL = 8;
-// 自分が書いた位置からこれ以上ずれていたら、誰かが動かしたとみなして譲る
+// 自分が書いた位置からこれ以上ずれていたら、誰かが動かしたとみなす
 const SCROLL_HANDOVER_PX = 4;
 
-// 行の移動は同じ rAF で進める。スクロール量を打ち消す translate を持たせる
-// ことで、後続行は待ち時間が終わるまで画面上の位置を保つ。
-// transform は行の拡大・文字同期が使うので、独立した translate だけを触る。
+// 行ごとの時間差。上の行から順に少しずつ遅れて動き出す。
 const LYRIC_STAGGER_DELAY = 0.032;
 const LYRIC_STAGGER_MAX_ROWS = 32;
 const LYRIC_STAGGER_STIFFNESS = 145;
 const LYRIC_STAGGER_DAMPING = 19;
 
+// キーフレームの間隔。間は合成側が直線で埋める。1/60 秒刻みなら
+// 120Hz の画面で間を埋めても、曲線との差は 0.1px に届かない。
+const LYRIC_MOTION_FRAME_SEC = 1 / 60;
+const LYRIC_MOTION_MAX_SEC = 3;
+// 画面の外でも、この距離までに入る行は動かす
+const LYRIC_MOTION_MARGIN_PX = 80;
+
 const isLyricRowMotionEnabled = () => typeof config !== 'undefined' &&
   config.lyricStagger !== false && !config.lowCpuMode;
 
+// 減衰ばね(質量 1)の t 秒後の変位 y と速度 v。y0 は行き先からのずれ。
+const sampleLyricSpring = (k, c, y0, v0, t) => {
+  const w0 = Math.sqrt(k);
+  const zeta = c / (2 * w0);
+  if (zeta < 1 - 1e-6) {
+    const a = zeta * w0;
+    const wd = w0 * Math.sqrt(1 - zeta * zeta);
+    const b = (v0 + a * y0) / wd;
+    const e = Math.exp(-a * t);
+    const cos = Math.cos(wd * t);
+    const sin = Math.sin(wd * t);
+    return {
+      y: e * (y0 * cos + b * sin),
+      v: e * ((b * wd - a * y0) * cos - (y0 * wd + a * b) * sin),
+    };
+  }
+  if (zeta <= 1 + 1e-6) {
+    const b = v0 + w0 * y0;
+    const e = Math.exp(-w0 * t);
+    return { y: (y0 + b * t) * e, v: (v0 - w0 * b * t) * e };
+  }
+  const s = w0 * Math.sqrt(zeta * zeta - 1);
+  const r1 = -zeta * w0 + s;
+  const r2 = -zeta * w0 - s;
+  const c1 = (v0 - r2 * y0) / (r1 - r2);
+  const c2 = y0 - c1;
+  const e1 = Math.exp(r1 * t);
+  const e2 = Math.exp(r2 * t);
+  return { y: c1 * e1 + c2 * e2, v: c1 * r1 * e1 + c2 * r2 * e2 };
+};
+
+// 着地するまでの変位を等間隔に並べる。最後は必ず 0。
+const buildLyricRowMotionPath = (k, c, y0, v0) => {
+  const path = [y0];
+  for (let i = 1; ; i++) {
+    const t = i * LYRIC_MOTION_FRAME_SEC;
+    const { y, v } = sampleLyricSpring(k, c, y0, v0, t);
+    if ((Math.abs(y) < SCROLL_SETTLE_PX && Math.abs(v) < SCROLL_SETTLE_VEL) || t >= LYRIC_MOTION_MAX_SEC) {
+      path.push(0);
+      return path;
+    }
+    path.push(y);
+  }
+};
+
+// 行がいま行き先からどれだけずれているか(scrollTop と同じ向き)と速度、
+// それに残りの待ち時間。アニメーションの経過時間から式で出す。
+const readLyricRowMotion = (state) => {
+  let elapsed = 0;
+  try { elapsed = (Number(state.anim.currentTime) || 0) / 1000; } catch (e) { /* 破棄済み */ }
+  const t = elapsed - state.delay;
+  if (t >= state.duration) return { y: 0, v: 0, wait: 0 };
+  if (t <= 0) return { y: state.y0, v: state.v0, wait: -t };
+  const { y, v } = sampleLyricSpring(state.k, state.c, state.y0, state.v0, t);
+  return { y, v, wait: 0 };
+};
+
+// その行の見た目が、本来の位置から何 px ずれているか。
+// 行の位置を getBoundingClientRect で測る所は、これを引いて本来の位置に戻す。
+const lyricRowScrollOffset = (row) => {
+  const state = row?._ytmMotion;
+  return state ? -readLyricRowMotion(state).y : 0;
+};
+
 // 自動追従へ戻る途中は、読んでいた過去行をまだ消さない。
-// 復帰タイマーだけでは呼ばず、実際のスクロール・行のばねが着いた時に呼ぶ。
+// 復帰タイマーだけでは呼ばず、行の動きが着いた時に呼ぶ。
 const finishLyricBrowseReturn = (container) => {
-  if (!container?._ytmResumeFadeAfterScroll || container._scrollTarget !== undefined ||
-    container._ytmRowMotion) return;
+  if (!container?._ytmResumeFadeAfterScroll || container._ytmRowMotion) return;
   container._ytmResumeFadeAfterScroll = false;
   container.classList?.remove('ytm-user-browsing-lyrics');
 };
 
+const dropLyricRowMotion = (state) => {
+  try { state.anim.cancel(); } catch (e) { /* 破棄済み */ }
+  if (state.row._ytmMotion === state) state.row._ytmMotion = undefined;
+};
+
+// 動きを止めて、行を本来の位置に置く。再描画・シーク・窓の大きさの変更など、
+// いまの動きがもう意味を持たない時に使う。
 const resetLyricRowMotion = (container) => {
   const motion = container?._ytmRowMotion;
   if (!motion) return;
-  for (const state of motion.rows) {
-    state.row.style.translate = '';
-    state.row._ytmScrollOffset = 0;
-  }
   container._ytmRowMotion = undefined;
+  for (const state of motion.values()) dropLyricRowMotion(state);
 };
 
-const startLyricRowMotion = (container, target, primaryIndex) => {
-  const rows = container.children;
-  const height = container.clientHeight;
-  const travel = target - container.scrollTop;
-  if (!isLyricRowMotionEnabled() || !rows?.length || !height ||
-    !Number.isInteger(primaryIndex) || Math.abs(travel) > height * 1.5) {
-    resetLyricRowMotion(container);
-    return;
-  }
-  const previous = container._ytmRowMotion;
-  const previousStates = new Map((previous?.rows || []).map(state => [state.row, state]));
-  const top = container.getBoundingClientRect().top;
-  const margin = Math.max(80, Math.abs(travel));
-  const first = Math.max(0, primaryIndex - (LYRIC_STAGGER_MAX_ROWS / 2));
-  const end = Math.min(rows.length, first + LYRIC_STAGGER_MAX_ROWS);
-  const states = [];
-  // レイアウトを読むのは行が切り替わった時だけ。長い曲でも測定は最大32行。
-  for (let i = first; i < end; i++) {
-    const row = rows[i];
-    if (!row.classList.contains('lyric-line')) continue;
-    const rect = row.getBoundingClientRect();
-    const naturalTop = rect.top - (row._ytmScrollOffset || 0);
-    if (!rect.height || naturalTop + rect.height < top - margin ||
-      naturalTop > top + height + margin) continue;
-    const prior = previousStates.get(row);
-    states.push(prior || {
-      row,
-      pos: container.scrollTop - (row._ytmScrollOffset || 0),
-      vel: 0,
-      delay: states.length * LYRIC_STAGGER_DELAY,
-    });
-    previousStates.delete(row);
-  }
-  // 今回の表示範囲から外れた行に補正を残さない。
-  for (const state of previousStates.values()) {
-    state.row.style.translate = '';
-    state.row._ytmScrollOffset = 0;
-  }
-  container._ytmRowMotion = states.length ? { rows: states, target } : undefined;
-};
-
-const stepLyricRowMotion = (container, dt) => {
+const onLyricRowMotionFinished = (container, state) => {
   const motion = container._ytmRowMotion;
-  if (!motion) return;
-  if (!isLyricRowMotionEnabled()) {
-    resetLyricRowMotion(container);
-    finishLyricBrowseReturn(container);
-    return;
-  }
-  let moving = false;
-  const scrollTop = container.scrollTop;
-  for (const state of motion.rows) {
-    let activeDt = dt;
-    if (state.delay > 0) {
-      const wait = Math.min(activeDt, state.delay);
-      state.delay -= wait;
-      activeDt -= wait;
-    }
-    // 大きなフレーム間隔でもばねが暴れないよう小分けに積分する。
-    while (activeDt > 0) {
-      const step = Math.min(activeDt, 1 / 120);
-      state.vel += (-LYRIC_STAGGER_STIFFNESS * (state.pos - motion.target) -
-        LYRIC_STAGGER_DAMPING * state.vel) * step;
-      state.pos += state.vel * step;
-      activeDt -= step;
-    }
-    if (state.delay <= 0 && Math.abs(state.pos - motion.target) < SCROLL_SETTLE_PX &&
-      Math.abs(state.vel) < SCROLL_SETTLE_VEL) {
-      state.pos = motion.target;
-      state.vel = 0;
-    } else {
-      moving = true;
-    }
-    const offset = Number((scrollTop - state.pos).toFixed(3));
-    if (state.row._ytmScrollOffset !== offset) {
-      state.row._ytmScrollOffset = offset;
-      state.row.style.translate = `0 ${offset}px`;
-    }
-  }
-  if (!moving && container._scrollTarget === undefined) {
-    resetLyricRowMotion(container);
-    finishLyricBrowseReturn(container);
-  }
+  if (!motion || motion.get(state.row) !== state) return;
+  motion.delete(state.row);
+  dropLyricRowMotion(state);
+  if (motion.size) return;
+  container._ytmRowMotion = undefined;
+  finishLyricBrowseReturn(container);
 };
 
-const snapLyricScroll = (container, preserveRowMotion = false) => {
-  const hadRowMotion = !!container?._ytmRowMotion;
-  if (!preserveRowMotion) resetLyricRowMotion(container);
-  if (!container) return;
-  if (container._scrollTarget === undefined) {
-    // 外側が到着済みで行だけが動いていた場合、一時停止の補正解除で復帰完了。
-    // 再生停止中に復帰タイマーだけが切れた場合は、表示を保って再開を待つ。
-    if (hadRowMotion && !preserveRowMotion) finishLyricBrowseReturn(container);
-    return;
-  }
-  container.scrollTop = container._scrollTarget;
+const writeLyricScrollTop = (container, top) => {
+  container.scrollTop = top;
   // 書いた値ではなく、丸められた実際の値を覚える。
   // scrollTop は 0〜(scrollHeight - clientHeight) に丸められる。中央合わせの
   // 行き先は曲頭と曲末で範囲の外に出る(上下の余白 30vh に対し中央は
   // clientHeight/2 = 32.5vh。行が 5vh より低いと、1行目の行き先が負になる)。
-  // ここで丸める前の値を覚えると、以後 stepLyricScroll の「誰かが動かした」
-  // 判定が毎フレーム成立して、追従が二度と動かなくなる。
-  // 歌詞をクリックすると後方シークになり即時ジャンプでここを通るので、
-  // 曲頭の行を選ぶとその曲のあいだ自動スクロールが死んでいた。
-  container._scrollPos = container.scrollTop;
+  // ここで丸める前の値を覚えると、以後 onLyricContainerScroll の「誰かが動かした」
+  // 判定が毎回成立して、追従が二度と落ち着かなくなる。
   container._scrollLastWritten = container.scrollTop;
-  container._scrollVel = 0;
-  container._scrollTarget = undefined;
-  finishLyricBrowseReturn(container);
+  return container._scrollLastWritten;
 };
 
-// 先頭へ戻す時など、ばねの外から scrollTop を書く場合はこれを通す。
+// 行が変わった時に1回だけ呼ぶ。scrollTop を行き先へ飛ばし、飛ばしたぶんを
+// 見えている行の translate で打ち消してから、ばねで 0 へ戻す。
+const startLyricRowMotion = (container, target, primaryIndex) => {
+  const from = container.scrollTop;
+  // いま動いている行の、この瞬間の位置と速度を先に控える(止めると読めない)
+  const previous = container._ytmRowMotion;
+  const carried = new Map();
+  if (previous) {
+    for (const state of previous.values()) carried.set(state.row, readLyricRowMotion(state));
+    resetLyricRowMotion(container);
+  }
+
+  const to = writeLyricScrollTop(container, target);
+  const rows = container.children;
+  const height = container.clientHeight;
+  if (!rows?.length || !height || typeof rows[0].animate !== 'function') {
+    finishLyricBrowseReturn(container);
+    return;
+  }
+
+  const jump = to - from;
+  // 遠くへ飛ぶ時(手で読みに行った所から戻る等)は時間差を付けない。
+  // 付けると画面何枚ぶんもの行が順に遅れて、戻り切るまでが長くなる。
+  const stagger = isLyricRowMotionEnabled() && Math.abs(jump) <= height * 1.5;
+  const k = stagger ? LYRIC_STAGGER_STIFFNESS : SCROLL_STIFFNESS;
+  const c = stagger ? LYRIC_STAGGER_DAMPING : SCROLL_DAMPING;
+  // 行き過ぎるぶんも画面に入りうるので、遠いほど広めに見る
+  const margin = LYRIC_MOTION_MARGIN_PX + Math.abs(jump) * 0.05;
+  const viewTop = container.getBoundingClientRect().top;
+
+  // 動いている間に画面に入る行だけを拾う。行は上から順に並んでいるので、
+  // 歌っている行から上下へたどり、画面の外に出きった所で打ち切る。
+  // 測るのは行が変わった時だけ。
+  const picked = [];
+  // 戻り値 false で、その向きへの走査をやめる
+  const visit = (i, dir) => {
+    const row = rows[i];
+    if (!row.classList.contains('lyric-line')) return true;
+    const rect = row.getBoundingClientRect();
+    if (!rect.height) return true;
+    const endTop = rect.top - viewTop;
+    const prior = carried.get(row);
+    const y0 = from + (prior ? prior.y : 0) - to;
+    const startTop = endTop - y0;
+    const hi = Math.min(startTop, endTop);
+    const lo = Math.max(startTop, endTop) + rect.height;
+    if (lo < -margin) return dir > 0;
+    if (hi > height + margin) return dir < 0;
+    picked.push({ index: i, row, y0, v0: prior ? prior.v : 0, wait: prior ? prior.wait : null });
+    return true;
+  };
+  const center = Number.isInteger(primaryIndex)
+    ? Math.min(Math.max(primaryIndex, 0), rows.length - 1)
+    : 0;
+  for (let i = center; i < rows.length; i++) if (!visit(i, 1)) break;
+  for (let i = center - 1; i >= 0; i--) if (!visit(i, -1)) break;
+  // 打ち切った先でまだ動いている行も、途中で放すと跳ぶので最後まで動かす
+  for (const row of carried.keys()) {
+    if (picked.some(p => p.row === row) || row.parentNode !== container) continue;
+    const prior = carried.get(row);
+    picked.push({ index: Array.prototype.indexOf.call(rows, row), row, y0: from + prior.y - to, v0: prior.v, wait: prior.wait });
+  }
+  picked.sort((a, b) => a.index - b.index);
+
+  const motion = new Map();
+  // 新しく動き出す行はみな同じ距離・速度 0 なので、キーフレームを使い回す
+  const shared = new Map();
+  picked.forEach(({ row, y0, v0, wait }, order) => {
+    if (Math.abs(y0) < SCROLL_SETTLE_PX && Math.abs(v0) < SCROLL_SETTLE_VEL) return;
+    const delay = wait !== null
+      ? wait
+      : (stagger ? Math.min(order, LYRIC_STAGGER_MAX_ROWS - 1) * LYRIC_STAGGER_DELAY : 0);
+    const key = `${y0.toFixed(2)}|${v0.toFixed(1)}`;
+    let built = shared.get(key);
+    if (!built) {
+      const path = buildLyricRowMotionPath(k, c, y0, v0);
+      built = {
+        frames: path.map(y => ({ translate: `0 ${(-y).toFixed(2)}px` })),
+        duration: (path.length - 1) * LYRIC_MOTION_FRAME_SEC,
+      };
+      shared.set(key, built);
+    }
+    let anim;
+    try {
+      anim = row.animate(built.frames, {
+        duration: built.duration * 1000,
+        delay: delay * 1000,
+        // 待っている間は元いた所に留まる。終われば何も残さない。
+        fill: 'backwards',
+        easing: 'linear',
+      });
+    } catch (e) {
+      return;
+    }
+    const state = { row, anim, k, c, y0, v0, delay, duration: built.duration };
+    row._ytmMotion = state;
+    motion.set(row, state);
+    anim.onfinish = () => onLyricRowMotionFinished(container, state);
+  });
+
+  if (motion.size) container._ytmRowMotion = motion;
+  else finishLyricBrowseReturn(container);
+};
+
+// 先頭へ戻す時など、動きの外から scrollTop を書く場合はこれを通す。
 // 記録を残したまま書き換えると、次のフレームで「誰かが動かした」と
-// 誤判定して追従が止まる。
+// 誤判定して寄せ直しが走る。
 const resetLyricScrollState = (container, top = 0) => {
   if (!container) return;
   container._ytmResumeFadeAfterScroll = false;
   resetLyricRowMotion(container);
-  container.scrollTop = top;
-  container._scrollTarget = undefined;
-  container._scrollVel = 0;
-  container._scrollPos = container.scrollTop;
-  container._scrollLastWritten = container.scrollTop;
+  writeLyricScrollTop(container, top);
 };
 
 // ── 歌っている行を止める位置 ────────────────────────────────
@@ -8763,90 +8861,47 @@ const lyricAnchorOffset = (container, rowHeight) => {
 
 const requestLyricScroll = (container, target, instant, primaryIndex) => {
   if (!container) return;
-  // 行側のばねもブラウザが到達できる位置を目標にする。
+  // ブラウザが到達できる位置を目標にする。
   if (Number.isFinite(container.scrollHeight) && Number.isFinite(container.clientHeight)) {
     target = Math.max(0, Math.min(target, container.scrollHeight - container.clientHeight));
   }
   if (instant) {
-    container._scrollTarget = target;
-    snapLyricScroll(container);
-    return;
-  }
-  // 前回自分が書いた位置から離れていたら、ユーザーが動かしたか
-  // レイアウトが変わったということ。そこから引き継ぐ。
-  const written = container._scrollLastWritten;
-  if (written === undefined || Math.abs(container.scrollTop - written) > SCROLL_HANDOVER_PX) {
     resetLyricRowMotion(container);
-    container._scrollPos = container.scrollTop;
-    container._scrollVel = 0;
-    // 引き継いだ位置を「自分が書いた位置」としても覚える。ここを古いまま
-    // にすると、次の stepLyricScroll が同じずれを見て「誰かが動かした」と
-    // 手を引き、印(_lastScrolledIndex)を戻す。次のフレームでまた頼み直して
-    // また手を引く、を曲の終わりまで繰り返し、手で歌詞をスクロールした後は
-    // 追従が二度と戻らなかった(実機で再現: 手を離して 3 秒後も scrollTop が
-    // 動かず、歌っている行は画面外のまま)。
-    container._scrollLastWritten = container.scrollTop;
-  }
-  startLyricRowMotion(container, target, primaryIndex);
-  container._scrollTarget = target;
-};
-
-const stepLyricScroll = (container, dt) => {
-  if (!container || (container._scrollTarget === undefined && !container._ytmRowMotion)) return;
-
-  // 動かしている最中にユーザーが触ったら、そちらを優先して手を引く
-  if (container._scrollLastWritten !== undefined &&
-    Math.abs(container.scrollTop - container._scrollLastWritten) > SCROLL_HANDOVER_PX) {
-    container._scrollTarget = undefined;
-    container._scrollVel = 0;
-    resetLyricRowMotion(container);
-    // 途中で手を引いたなら、その行へは行き着いていない。
-    // 「スクロール済み」の印を戻して次のフレームで出し直せるようにする。
-    // これが無いと、翻訳の到着で行の高さが変わるなど、ユーザー操作以外で
-    // scrollTop が動いた回に、次の行が来るまで追従が止まる。
-    // 本当にユーザーが掴んでいる時は下の isUserScrolling で弾かれ、
-    // 手を離して 3 秒すればどのみち印は戻る。
-    container._lastScrolledIndex = -1;
+    writeLyricScrollTop(container, target);
+    finishLyricBrowseReturn(container);
     return;
   }
-
-  const target = container._scrollTarget;
-  if (target === undefined) {
-    stepLyricRowMotion(container, dt);
-    return;
-  }
-  let pos = container._scrollPos ?? container.scrollTop;
-  let vel = container._scrollVel || 0;
-  const diff = pos - target;
-
-  if (Math.abs(diff) < SCROLL_SETTLE_PX && Math.abs(vel) < SCROLL_SETTLE_VEL) {
-    snapLyricScroll(container, true);
-    stepLyricRowMotion(container, dt);
-    return;
-  }
-
-  vel += (-SCROLL_STIFFNESS * diff - SCROLL_DAMPING * vel) * dt;
-  pos += vel * dt;
-
-  container._scrollPos = pos;
-  container._scrollVel = vel;
-  container.scrollTop = pos;
-  container._scrollLastWritten = container.scrollTop;
-  stepLyricRowMotion(container, dt);
-
-  // 自分で動かしているぶんの scroll イベントを、ユーザー操作と
+  // 自分で書いた scrollTop の scroll イベントを、ユーザー操作と
   // 取り違えられないようにしておく(どちらの判定もこれを最初に見る)。
   container._suppressUserScrollUntil = performance.now() + 220;
   if (container === ui.lyrics) suppressUserScrollDetection(220);
+  watchLyricContainerScroll(container);
+  startLyricRowMotion(container, target, primaryIndex);
 };
 
-let _lastScrollStepAt = 0;
-const stepLyricScrolls = (nowMs) => {
-  const dt = _lastScrollStepAt ? Math.min(0.05, (nowMs - _lastScrollStepAt) / 1000) : 0;
-  _lastScrollStepAt = nowMs;
-  if (dt <= 0) return;
-  stepLyricScroll(ui.lyrics, dt);
-  stepLyricScroll(PipManager.pipLyricsContainer, dt);
+// 行が動いている間に、scrollTop を誰かが動かしたか。
+// 翻訳の到着で行の高さが変わった、利用者がホイールで動かした、など。
+// 寄せた位置はもう合っていないので、「スクロール済み」の印を戻して次のフレームで
+// 出し直させる(利用者が掴んでいる間は isUserScrolling の側で見送られ、
+// 手を離して 3 秒すればどのみち印は戻る)。
+// 動いている行はそのまま着地させる。止めると残りの距離を一度に跳ぶ。
+//
+// 毎フレーム scrollTop を読んで確かめてはいけない。文字の塗りが毎フレーム
+// スタイルを汚すので、読むたびにその場でスタイルとレイアウトを確定させる
+// ことになる(実測でこれだけで 8ms/秒)。scroll イベントが来た時だけ見る。
+const onLyricContainerScroll = (event) => {
+  const container = event.currentTarget;
+  if (!container?._ytmRowMotion) return;
+  const written = container._scrollLastWritten;
+  if (written !== undefined && Math.abs(container.scrollTop - written) <= SCROLL_HANDOVER_PX) return;
+  container._scrollLastWritten = container.scrollTop;
+  container._lastScrolledIndex = -1;
+};
+
+const watchLyricContainerScroll = (container) => {
+  if (container._ytmScrollWatched || typeof container.addEventListener !== 'function') return;
+  container._ytmScrollWatched = true;
+  container.addEventListener('scroll', onLyricContainerScroll, { passive: true });
 };
 
 // ── 広告の間 ────────────────────────────────────────────
@@ -8899,8 +8954,6 @@ function startLyricRafLoop() {
   // 一時停止をまたぐと「止まっていた間の実時間」が補間に乗ってしまう
   resetPlaybackClock();
 
-  _lastScrollStepAt = 0;
-
   const scheduleNextFrame = () => {
     if (PipManager.pipWindow) {
       lyricRafWindow = PipManager.pipWindow;
@@ -8913,9 +8966,6 @@ function startLyricRafLoop() {
 
   const loop = () => {
     const v = _cachedVideoEl || (_cachedVideoEl = document.querySelector('video'));
-    // rAF が渡す時刻は使わない。PIP を開くとループが向こうの窓の
-    // requestAnimationFrame に移り、時刻の原点が変わってしまう。
-    stepLyricScrolls(performance.now());
 
     if (v) {
       if (PipManager.pipWindow) {
@@ -8983,17 +9033,12 @@ function startLyricRafLoop() {
         scheduleNextFrame();
       } else {
         if (!animatedCaptionData) refreshCompletedLyrics(v.ended ? v.duration : getCurrentPlaybackTimeSec(), v.duration);
-        // 止まっている間はループが回らない。中途半端な位置で残らないよう着地させる。
-        snapLyricScroll(ui.lyrics);
-        snapLyricScroll(PipManager.pipLyricsContainer);
         // 文字の動きは合成側の時計で走っているので、明示的に止めないと
         // 一時停止中も歌詞だけ動き続ける。
         pauseAllLyricWordMotion();
         isRafLoopRunning = false;
       }
     } else {
-      snapLyricScroll(ui.lyrics);
-      snapLyricScroll(PipManager.pipLyricsContainer);
       pauseAllLyricWordMotion();
       isRafLoopRunning = false;
     }
@@ -9018,9 +9063,7 @@ const recenterLyricsAfterResize = () => {
     container._lastScrolledIndex = -1;
     // 直前の位置から流すと、変わったあとの見当違いな所から動き出す。
     container._instantNextScroll = true;
-    // 追いかけている途中の目標も、前の大きさで出した px なので捨てる。
-    container._scrollTarget = undefined;
-    container._scrollVel = 0;
+    // 動いている途中の行も、前の大きさで出した px なので捨てる。
     resetLyricRowMotion(container);
   }
 };
@@ -9445,7 +9488,7 @@ function updateLyricHighlight(currentTime) {
             // getBoundingClientRect を使って要素の絶対位置から確実なスクロール量を計算
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
-            const targetScroll = container.scrollTop + rRect.top - (r._ytmScrollOffset || 0) - containerRect.top
+            const targetScroll = container.scrollTop + rRect.top - lyricRowScrollOffset(r) - containerRect.top
               - lyricAnchorOffset(container, rRect.height);
 
             isProgrammaticScrolling = true;
@@ -9469,7 +9512,7 @@ function updateLyricHighlight(currentTime) {
 
             const containerRect = container.getBoundingClientRect();
             const rRect = r.getBoundingClientRect();
-            const targetScroll = container.scrollTop + rRect.top - (r._ytmScrollOffset || 0) - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
+            const targetScroll = container.scrollTop + rRect.top - lyricRowScrollOffset(r) - containerRect.top - (container.clientHeight * 0.35) + (rRect.height / 2);
 
             container._isProgrammaticScrolling = true;
             requestLyricScroll(container, targetScroll, scrollBehavior === 'auto', idx);
@@ -9512,7 +9555,7 @@ function updateLyricHighlight(currentTime) {
 }
 
 function setupPlayerBarBlankClickGuard() {
-  const bar = document.querySelector(PLAYER_BAR_SELECTOR);
+  const bar = PlayerBar.get();
   if (!bar || bar.dataset.ytmBlankClickGuard === '1') return;
   bar.dataset.ytmBlankClickGuard = '1';
 
@@ -9590,20 +9633,41 @@ let requestImmersionTick = () => { void tick(); };
 // 入口が消えないよう、前から順に「画面に見えている」最初の所へ入れる。
 // 以前は .right-controls-buttons 決め打ちで、これが無くなると
 // ボタンが出ず、Immersion を開く手段がまるごと無くなっていた。
+// 先頭は自前のバー(YTM のバーが押せない時だけ出る。出ていない間は
+// 見えないので選ばれない)。
 const MODE_TOGGLE_HOSTS = [
+  ['#ytmi-fallback-bar .ytmi-fb-toggle-slot', 'append'],
   ['ytmusic-player-bar .right-controls-buttons', 'prepend'],
   ['.right-controls-buttons', 'prepend'],
-  ['ytmusic-miniplayer .ytMusicMiniPlayerRightSection', 'prepend'],
+  // 新バーは右の列の一番端(⋮ メニューの右)。PR #114 で neco222 さんが
+  // 「IMMERSION の位置が悪いので一番右に寄せた」と提案した並び
+  ['ytmusic-miniplayer .ytMusicMiniPlayerRightSection', 'append'],
   ['ytmusic-player-bar .right-controls', 'prepend'],
   ['ytmusic-player-bar #right-controls', 'prepend'],
 ];
 const MODE_TOGGLE_FLOATING_CLASS = 'ytm-mode-toggle-floating';
-// 本来の置き場所(先頭 2 つは旧バーの .right-controls-buttons、
-// 3 つ目は新バーの右側の列)以外にいる間は、見張りが毎回選び直して、
+// 本来の置き場所(自前のバー、旧バーの .right-controls-buttons、
+// 新バーの右側の列)以外にいる間は、見張りが毎回選び直して、
 // 戻れる時に戻す。
-const MODE_TOGGLE_PRIMARY_HOSTS = 3;
+const MODE_TOGGLE_PRIMARY_HOSTS = 4;
 let _modeToggleAway = false;
 const isShownOnScreen = (el) => !!el && el.isConnected && el.getClientRects().length > 0;
+// 見えていても、上に何かが被さっていれば押せない(Immersion の全面の層の
+// 下に潜ったバー等)。その位置を押した時に当たるものが中にあるかで見る。
+// 置き場所を調べる時、上に浮いている IMMERSION ボタンが被さっているのは数えない。
+const isHitTestable = (el) => {
+  if (typeof el.getBoundingClientRect !== 'function' || typeof document.elementsFromPoint !== 'function') return true;
+  const r = el.getBoundingClientRect();
+  // 空の置き場所(ボタンを入れる前の自前のバーの右端など)は測りようがない
+  if (!r.width || !r.height) return true;
+  const x = Math.min(window.innerWidth - 1, Math.max(0, r.left + r.width / 2));
+  const y = Math.min(window.innerHeight - 1, Math.max(0, r.top + r.height / 2));
+  const hit = document.elementsFromPoint(x, y).find(h => el.contains(h) || !h.closest('#my-mode-toggle'));
+  return !!hit && el.contains(hit);
+};
+// 動画モードでは、YTM が操作の無い間バーをわざと隠して押せなくする。
+// その間に当たり判定をすると、ボタンが浮いて出ては戻るを繰り返すので測らない。
+const barMayBeAutoHidden = () => !!moviemode;
 
 // 置く所を決める。見える候補が無い時は:
 //  ・プレイヤーバーごと隠れている(まだ何も再生していない等) → 在る候補へ
@@ -9618,10 +9682,10 @@ const pickModeToggleHost = () => {
     const el = document.querySelector(selector);
     if (!el) continue;
     const primary = i < MODE_TOGGLE_PRIMARY_HOSTS;
-    if (isShownOnScreen(el)) return { el, how, primary };
+    if (isShownOnScreen(el) && (barMayBeAutoHidden() || isHitTestable(el))) return { el, how, primary };
     if (!firstExisting) firstExisting = { el, how, primary };
   }
-  const bar = document.querySelector(PLAYER_BAR_SELECTOR);
+  const bar = PlayerBar.get();
   const barHidden = bar ? !isShownOnScreen(bar) : !isPlayingSomething();
   if (barHidden) return firstExisting;
   return { el: document.body, how: 'float', primary: false };
@@ -9643,16 +9707,160 @@ const placeModeToggle = (btn, host) => {
   }
 };
 
-const toggleImmersionMode = () => {
-  config.mode = !config.mode;
-  document.body.classList.toggle('ytm-custom-layout', config.mode);
-  if (isYTMPremiumUser()) changeIModeUIWithMovieMode(config.mode);
+// ── Immersion を出すかどうか ──────────────────────────────
+// config.mode は「プレイヤーページを Immersion で置き換える」の入切。
+// 以前は「config.mode かつ ytmusic-app-layout に player-page-open が在る」の
+// 時だけ出していた。YTM がこの属性をやめると、どの入口から押しても
+// 何も起きなくなる。そこで
+//  ・プレイヤーページが開いているか は、属性に加えて URL(/watch)でも見る。
+//    URL は共有リンクにもなる公開の約束なので、画面の作り直しでは変わらない
+//    (実機: 開くと /watch、畳むと元の閲覧ページの URL に戻る)
+//  ・利用者がはっきり「開く」と押した時(ボタン・ツールバーのアイコン・
+//    ショートカット)は、プレイヤーページの状態に関係なく出す
+//  ・プレイヤーページを畳んだ(開→閉に変わった)時と、閲覧ページの上で
+//    開いたまま別のページへ移った時は、明示の「開く」を取り消す。
+//    状態そのものではなく変わり目で見るので、属性が無い作りでも
+//    勝手に閉じたりしない
+let _immersionManualOpen = false;
+let _immersionManualHref = '';
+let _lastPlayerPageOpen = null;
+const readPlayerPageOpen = () => {
+  const layout = _cachedLayoutEl && _cachedLayoutEl.isConnected
+    ? _cachedLayoutEl
+    : (_cachedLayoutEl = document.querySelector('ytmusic-app-layout'));
+  if (layout && layout.hasAttribute('player-page-open')) return true;
+  return location.pathname === '/watch';
+};
+const shouldShowImmersion = () => {
+  const open = readPlayerPageOpen();
+  if (_lastPlayerPageOpen === true && !open) _immersionManualOpen = false;
+  _lastPlayerPageOpen = open;
+  if (!config.mode) return false;
+  if (open) return true;
+  if (!_immersionManualOpen) return false;
+  if (location.pathname + location.search !== _immersionManualHref) {
+    _immersionManualOpen = false;
+    return false;
+  }
+  return true;
+};
+
+const applyImmersionShown = (shown) => {
+  document.body.classList.toggle('ytm-custom-layout', shown);
+  PlayerBar.check({ shown, skip: true });
+};
+
+const setImmersionOpen = (open) => {
+  config.mode = !!open;
+  _immersionManualOpen = !!open;
+  _immersionManualHref = open ? location.pathname + location.search : '';
+  applyImmersionShown(shouldShowImmersion());
+  // 動画モードの組み替えは #main-panel 等の YTM の作りに頼っている。
+  // そこで失敗しても、開閉そのものは止めない。
+  try {
+    if (isYTMPremiumUser()) changeIModeUIWithMovieMode(config.mode);
+  } catch (e) {
+    console.warn('[YTM] 動画モードの切り替えに失敗', e);
+  }
   const btn = document.getElementById('my-mode-toggle');
   if (btn) btn.classList.toggle('active', config.mode);
   // 閉じている間に曲が変わっていたら、開いた瞬間に今の曲へ合わせる。
   // このボタンは監視の対象外(#right-controls)なので、自分で頼まないと
   // 次にプレイヤーバーが動くまで(たいてい次の曲まで)前の曲が出ていた。
   requestImmersionTick();
+  scheduleImmersionBarCheck();
+};
+
+// 出ていれば閉じ、出ていなければ開く。config.mode が入のまま
+// プレイヤーページを畳んで隠れている時に押されたら、切るのではなく開く
+// (以前は切れるだけで画面は何も変わらず、もう一度押す必要があった)。
+const toggleImmersionMode = () => {
+  setImmersionOpen(!document.body.classList.contains('ytm-custom-layout'));
+};
+
+// 自前のバーの ▼(プレイヤーを畳む)。Immersion を出している間はいつも
+// 出し、押されたら使える中で一番よい方法で畳む。YTM の ▼ と同じく、
+// Immersion の入切(config.mode)は残したまま隠す。
+//  1. 閲覧ページの上で開いている → 明示の「開く」を取り消すだけ
+//  2. YTM の「プレイヤーを畳む」ボタンを押す。見えていなくてもプログラム
+//     からは押せる(実機: 旧バーの ▼、新バー(wiz)ではプレイヤーページの
+//     「ミニプレーヤーを開く」。どちらも押すと畳まれ、再生は続く)
+//  3. 押しても畳まれない・ボタンが無い → YTM の中に戻り先(/watch 以外の
+//     ページ)があり、読み込み直さずに戻れるなら「戻る」。YTM はプレイヤー
+//     ページを開く時に履歴を積み、戻ると畳む。曲のリンクから直接開いた時に
+//     戻ると、YTM の外や読み込み直しになって再生が止まるので使わない
+//  4. どれもできない → Immersion を閉じる
+const YTM_COLLAPSE_SELECTORS = [
+  'ytmusic-player-bar .toggle-player-page-button',
+  'ytmusic-player-page .player-minimize-button',
+];
+const findYtmCollapseButton = () => {
+  for (const selector of YTM_COLLAPSE_SELECTORS) {
+    const host = document.querySelector(selector);
+    if (host) return host.querySelector('button') || host;
+  }
+  return null;
+};
+const canGoBackInApp = () => {
+  const nav = window.navigation;
+  const entry = nav && nav.currentEntry;
+  if (!entry || !nav.canGoBack || typeof nav.entries !== 'function') return false;
+  const prev = nav.entries()[entry.index - 1];
+  // ページごと読み込み直す戻り方だと、再生が止まる
+  if (!prev || !prev.url || prev.sameDocument === false) return false;
+  try {
+    const url = new URL(prev.url);
+    return url.origin === location.origin && url.pathname !== '/watch';
+  } catch (e) {
+    return false;
+  }
+};
+const canMinimizeImmersion = () => document.body.classList.contains('ytm-custom-layout');
+const MINIMIZE_CONFIRM_MS = 700;
+const minimizeImmersion = () => {
+  if (!canMinimizeImmersion()) return;
+  if (!readPlayerPageOpen()) {
+    _immersionManualOpen = false;
+    applyImmersionShown(shouldShowImmersion());
+    requestImmersionTick();
+    return;
+  }
+  const fallback = () => {
+    if (!readPlayerPageOpen()) return;
+    if (canGoBackInApp()) history.back();
+    else setImmersionOpen(false);
+  };
+  const btn = findYtmCollapseButton();
+  if (!btn) {
+    fallback();
+    return;
+  }
+  btn.click();
+  requestImmersionTick();
+  setTimeout(fallback, MINIMIZE_CONFIRM_MS);
+};
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.type !== 'YTMI_IMMERSION') return;
+  if (msg.action === 'open') setImmersionOpen(true);
+  else toggleImmersionMode();
+});
+
+// 開いた直後にバーが本当に押せるかを確かめる。整える CSS の切り替わりと
+// YTM 側の描き直しを待ってから、2 回続けて押せなければ自前のバーを出す。
+let _barCheckTimers = [];
+const scheduleImmersionBarCheck = () => {
+  _barCheckTimers.forEach(clearTimeout);
+  _barCheckTimers = [600, 1400].map(ms => setTimeout(runImmersionBarCheck, ms));
+};
+const runImmersionBarCheck = () => {
+  if (document.hidden) return;
+  const shown = document.body.classList.contains('ytm-custom-layout');
+  // 動画モードでは YTM が操作の無い間バーを隠す(わざと)。その間は判断しない
+  const changed = PlayerBar.check({ shown, skip: !!moviemode });
+  if (changed) ensureModeToggle(true);
+  if (PlayerBar.isFallbackOn()) PlayerBar.syncMinimize();
 };
 
 // 置き場所が CSS で隠された(要素は残っている)ことは、見張りでは測らず
@@ -9712,9 +9920,9 @@ const tick = async () => {
 
   ensureModeToggle(false);
 
-  const layout = _cachedLayoutEl || (_cachedLayoutEl = document.querySelector('ytmusic-app-layout'));
-  const isPlayerOpen = layout?.hasAttribute('player-page-open');
-  const immersionShown = config.mode && isPlayerOpen;
+  const wasShown = document.body.classList.contains('ytm-custom-layout');
+  const immersionShown = shouldShowImmersion();
+  if (immersionShown !== wasShown) scheduleImmersionBarCheck();
   // PiP は Immersion の外でも見え続ける。Immersion を閉じたりプレイヤーを
   // 畳んだりした後も、曲の切り替わりと歌詞の取得だけはここで続ける。
   // 以前はこの先へ進まなかったので、PiP に前の曲の題名と歌詞が残り、
@@ -9722,7 +9930,7 @@ const tick = async () => {
   // 器(ui.*)は PiP を開いた時点で組まれている。
   const followForPip = !immersionShown && !!(PipManager && PipManager.pipWindow) && !!ui.lyrics;
   if (!immersionShown) {
-    document.body.classList.remove('ytm-custom-layout');
+    if (wasShown) applyImmersionShown(false);
     if (typeof LyricCard !== 'undefined') LyricCard.cancel();
     if (!followForPip) {
       // Immersion を閉じている間は再生位置を追えていない。
@@ -9731,7 +9939,7 @@ const tick = async () => {
       return;
     }
   } else {
-    document.body.classList.add('ytm-custom-layout');
+    if (!wasShown) applyImmersionShown(true);
     initLayout();
     setupPlayerBarBlankClickGuard();
   }
@@ -10028,10 +10236,13 @@ function updateMetaUI(meta) {
         const blurredDataUrl = canvas.toDataURL();
         ui.bg.style.backgroundImage = `url(${blurredDataUrl})`;
         applyArtworkDim(measureArtworkLuminance(ctx, 64));
+        // 自前のプレイヤーバーを満たす色
+        PlayerBar.setTint(PlayerBar.tintFromPixels(ctx.getImageData(0, 0, 64, 64).data, 64));
       } catch (e) {
         console.warn("Failed to generate pre-blurred background via canvas:", e);
         ui.bg.style.backgroundImage = `url(${meta.src})`;
         applyArtworkDim(null);
+        PlayerBar.setTint(null);
       }
     };
     img.onerror = () => {
@@ -10039,6 +10250,7 @@ function updateMetaUI(meta) {
       placeArtwork();
       ui.bg.style.backgroundImage = `url(${meta.src})`;
       applyArtworkDim(null);
+      PlayerBar.setTint(null);
     };
     if (!ui.artwork.querySelector('img')) placeArtwork();
     else setTimeout(placeArtwork, ARTWORK_SWAP_MAX_WAIT_MS);
@@ -10269,73 +10481,152 @@ YTMLog.log('YTM Immersion loaded.');
 
 // IMMERSION ボタンと監視の見張り。YTM がプレイヤーバーを作り直したり
 // ボタンを消したりしても、次の見張りで元に戻す。
-// 普段は「ページから外れていないか」を 2 つ読むだけで、要素を探したり
-// 位置を測ったり(レイアウトの計算を起こす)はしない。それをするのは
-// ボタンが消えた・本来の置き場所の外にいる、という異常な時だけ。
+// Immersion を閉じている間は「ページから外れていないか」と曲・ページの
+// 変わり目(URL と MediaSession の文字列)を読むだけで、位置を測ったり
+// (レイアウトの計算を起こす)はしない。それをするのは、ボタンが消えた・
+// 本来の置き場所の外にいる、という異常な時と、Immersion を開いている間
+// (歌詞が毎フレーム動いていて、測る手間は埋もれる)だけ。
 const MODE_TOGGLE_WATCH_MS = 1500;
 let _modeToggleWatchTimer = null;
 let _barObserver = null;
 let _observedBar = null;
+let _watchSignature = '';
+// 曲・ページの変わり目。プレイヤーバーを監視できない作りでも曲の
+// 切り替わりに追いつくよう、標準の MediaSession と URL で見る。
+const readTrackSignature = () => {
+  const md = navigator.mediaSession && navigator.mediaSession.metadata;
+  return [
+    location.pathname + location.search,
+    readPlayerPageOpen() ? 1 : 0,
+    md ? md.title : '',
+    md ? md.artist : '',
+  ].join('\u0001');
+};
 const watchModeToggle = () => {
   if (document.hidden) return;
+  const shown = document.body.classList.contains('ytm-custom-layout');
   const btn = document.getElementById('my-mode-toggle');
   if (!btn || !btn.isConnected || _modeToggleAway) {
     ensureModeToggle(true);
+  } else if (shown && !barMayBeAutoHidden() && isShownOnScreen(btn) && !isHitTestable(btn)) {
+    // 見えているのに何かの下に潜っている(Immersion の層の下のバー等)
+    ensureModeToggle(true);
   }
-  if (_observedBar && !_observedBar.isConnected) {
+  if (_observedBar && (!_observedBar.isConnected || _observedBar !== PlayerBar.current())) {
     // 監視していたプレイヤーバーが差し替わった。古い方はもう何も知らせない。
     _barObserver?.disconnect();
     _barObserver = null;
     _observedBar = null;
     setupObserver();
+  }
+  const signature = readTrackSignature();
+  if (signature !== _watchSignature) {
+    _watchSignature = signature;
+    requestImmersionTick();
   } else if (!_observedBar && config.mode) {
     // プレイヤーバーが見つからず監視を組めない間も、開いていれば追い続ける
     requestImmersionTick();
   }
+  if (shown) {
+    runImmersionBarCheck();
+  } else {
+    PlayerBar.rememberDisplay(_observedBar);
+    // 閉じている間に YTM がバーを作り直した(旧バーが空のまま残り、別の
+    // バーが現れた等)ことには、探し直さないと気づけない。位置を測るので、
+    // 何回かに 1 回だけ。
+    if (++_barResolveCount >= BAR_RESOLVE_EVERY) {
+      _barResolveCount = 0;
+      const bar = PlayerBar.get();
+      if (bar && bar !== _observedBar) {
+        _barObserver?.disconnect();
+        _barObserver = null;
+        _observedBar = null;
+        setupObserver();
+      }
+    }
+  }
+};
+const BAR_RESOLVE_EVERY = 4;
+let _barResolveCount = 0;
+
+// tick の予約。同じフレームに何度頼まれても 1 回にまとめる。
+let _tickScheduled = false;
+let _tickRafId = null;
+let _tickFallbackTimer = null;
+const runScheduledTick = () => {
+  if (!_tickScheduled) return;
+  _tickScheduled = false;
+  if (_tickRafId !== null) {
+    cancelAnimationFrame(_tickRafId);
+    _tickRafId = null;
+  }
+  if (_tickFallbackTimer !== null) {
+    clearTimeout(_tickFallbackTimer);
+    _tickFallbackTimer = null;
+  }
+  tick();
+};
+const scheduleTick = () => {
+  if (_tickScheduled) return;
+  _tickScheduled = true;
+  if (!document.hidden) {
+    _tickRafId = requestAnimationFrame(runScheduledTick);
+  }
+  _tickFallbackTimer = setTimeout(
+    runScheduledTick,
+    document.hidden ? 0 : 250
+  );
 };
 
+// プレイヤーバーに頼らない tick のきっかけ。一度だけ組む。
+//  ・<video> の読み込み・再生の知らせ(曲が変わると必ず来る)。メディアの
+//    イベントは泡立たないが、document の捕捉なら video が差し替わっても届く
+//  ・プレイヤーページの開閉(属性が在る作りなら、すぐ気づける)
+// 見つからない・来ない分は見張り(readTrackSignature)が拾う。
+let _tickDriversReady = false;
+let _layoutObserver = null;
+const setupTickDrivers = () => {
+  if (!_tickDriversReady) {
+    _tickDriversReady = true;
+    requestImmersionTick = scheduleTick;
+    PlayerBar.configure({ offset: () => timeOffset, canMinimize: canMinimizeImmersion, minimize: minimizeImmersion });
+    ['loadedmetadata', 'emptied', 'play', 'durationchange'].forEach(type => {
+      document.addEventListener(type, (e) => {
+        if (e.target instanceof HTMLMediaElement) scheduleTick();
+      }, true);
+    });
+  }
+  const layout = document.querySelector('ytmusic-app-layout');
+  if (layout && (!_layoutObserver || _layoutObserver._target !== layout)) {
+    _layoutObserver?.disconnect();
+    _layoutObserver = new MutationObserver(() => scheduleTick());
+    _layoutObserver._target = layout;
+    _layoutObserver.observe(layout, { attributes: true, attributeFilter: ['player-page-open'] });
+  }
+};
+
+let _barRetryTimer = null;
 const setupObserver = () => {
   if (_modeToggleWatchTimer === null) {
     _modeToggleWatchTimer = setInterval(watchModeToggle, MODE_TOGGLE_WATCH_MS);
   }
+  setupTickDrivers();
 
-  const targetNode = document.querySelector(PLAYER_BAR_SELECTOR);
-
+  const targetNode = PlayerBar.get();
 
   if (!targetNode) {
-    setTimeout(setupObserver, 500);
+    // バーが見つからなくても tick は回す(曲の切り替わりは上のきっかけで拾う)。
+    // バーは後から現れることがあるので、探し続ける。
+    if (_barRetryTimer === null) {
+      _barRetryTimer = setTimeout(() => {
+        _barRetryTimer = null;
+        if (!_observedBar) setupObserver();
+      }, 1000);
+    }
+    scheduleTick();
     return;
   }
 
-
-  let _tickScheduled = false;
-  let _tickRafId = null;
-  let _tickFallbackTimer = null;
-  const runScheduledTick = () => {
-    if (!_tickScheduled) return;
-    _tickScheduled = false;
-    if (_tickRafId !== null) {
-      cancelAnimationFrame(_tickRafId);
-      _tickRafId = null;
-    }
-    if (_tickFallbackTimer !== null) {
-      clearTimeout(_tickFallbackTimer);
-      _tickFallbackTimer = null;
-    }
-    tick();
-  };
-  const scheduleTick = () => {
-    if (_tickScheduled) return;
-    _tickScheduled = true;
-    if (!document.hidden) {
-      _tickRafId = requestAnimationFrame(runScheduledTick);
-    }
-    _tickFallbackTimer = setTimeout(
-      runScheduledTick,
-      document.hidden ? 0 : 250
-    );
-  };
-  requestImmersionTick = scheduleTick;
   const observer = new MutationObserver((mutations) => {
     // 既に次の tick を予約済みなら、中身を見る意味が無い。
     // 再生中はシークバーの属性変化が絶えず届くので、その回ぶんの
@@ -10355,8 +10646,7 @@ const setupObserver = () => {
     }
   });
 
-
-
+  _barObserver?.disconnect();
   _barObserver = observer;
   _observedBar = targetNode;
   observer.observe(targetNode, {
@@ -10366,7 +10656,9 @@ const setupObserver = () => {
     characterData: true
   });
 
-  YTMLog.log('YTM Immersion: Zero-delay observer started.');
+  YTMLog.log('YTM Immersion: Zero-delay observer started.', PlayerBar.variant());
+  // バーが替わったら、ボタンも新しいバーへ(古いバーの中に取り残さない)
+  ensureModeToggle(true);
 
   tick();
 };

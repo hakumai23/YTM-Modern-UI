@@ -420,8 +420,6 @@ pipDoc.body.innerHTML = `
 
       this.pipLyricsContainer = pipDoc.getElementById('pip-lyrics-container');
       this.pipLyricsContainer.innerHTML = ui.lyrics.innerHTML;
-      // 複製元の行が動いていても、小窓にはその瞬間の移動量を持ち込まない。
-      for (const row of this.pipLyricsContainer.children) row.style.translate = '';
       this.pipLyricsContainer._lastScrolledIndex = -1;
       this.pipLyricsContainer._isUserScrolling = false;
       this.pipLyricsContainer._isProgrammaticScrolling = false;
@@ -429,9 +427,9 @@ pipDoc.body.innerHTML = `
 
       const handleUserScroll = (event) => {
         if (!this.pipLyricsContainer) return;
-        // 自動スクロールは毎フレーム scrollTop を書くので、その間の
+        // 行が変わるたびに自動スクロールが scrollTop を書くので、その
         // scroll イベントをユーザー操作と取り違えない
-        // (lyrics-ui の stepLyricScroll がこの時刻を伸ばし続ける)。
+        // (lyrics-ui の requestLyricScroll がこの時刻を置く)。
         const directInput = event.type !== 'scroll';
         if (!directInput && performance.now() < (this.pipLyricsContainer._suppressUserScrollUntil || 0)) return;
         if (!directInput && this.pipLyricsContainer._isProgrammaticScrolling) {
@@ -441,9 +439,6 @@ pipDoc.body.innerHTML = `
         this.pipLyricsContainer._isUserScrolling = true;
         this.pipLyricsContainer._isProgrammaticScrolling = false;
         this.pipLyricsContainer._ytmResumeFadeAfterScroll = false;
-        this.pipLyricsContainer._scrollTarget = undefined;
-        this.pipLyricsContainer._scrollVel = 0;
-        resetLyricRowMotion(this.pipLyricsContainer);
         this.pipLyricsContainer.classList.add('ytm-user-browsing-lyrics');
         clearTimeout(userScrollPipTimeout);
         userScrollPipTimeout = setTimeout(() => {
@@ -480,6 +475,9 @@ pipDoc.body.innerHTML = `
         if (prevWrapper) {
           const btn = prevWrapper.querySelector('button') || prevWrapper.querySelector('tp-yt-paper-icon-button') || prevWrapper;
           btn.click();
+        } else {
+          // バーの作りが変わってボタンが見つからない時は、YTM のキー操作で送る
+          PlayerBar.controls.prev();
         }
       });
 
@@ -499,6 +497,8 @@ pipDoc.body.innerHTML = `
         if (nextWrapper) {
           const btn = nextWrapper.querySelector('button') || nextWrapper.querySelector('tp-yt-paper-icon-button') || nextWrapper;
           btn.click();
+        } else {
+          PlayerBar.controls.next();
         }
       });
 

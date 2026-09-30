@@ -5,8 +5,8 @@
 // 位置は意味を失う。それでも「この行へはもう寄せた」という印(_lastScrolledIndex)
 // が残っているため、次の行が始まるまで誰も直さない。
 //
-// 追従の途中なら stepLyricScroll の「誰かが動かした」判定が印を戻すが、
-// 落ち着くと snapLyricScroll が _scrollTarget を捨てるので、そこも通らない。
+// 行が動いている途中なら scroll イベントの「誰かが動かした」判定が印を戻すが、
+// 着地した後は誰も見ていない。
 
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -28,8 +28,6 @@ const sliceBetween = (from, to) => {
 const makeContainer = () => ({
   _lastScrolledIndex: 12,
   _instantNextScroll: false,
-  _scrollTarget: 4000,
-  _scrollVel: 42,
 })
 
 const run = (pip) => {
@@ -52,10 +50,9 @@ test('寄せ直しの印を戻す', () => {
   assert.equal(lyrics._lastScrolledIndex, -1, '寄せ済みの印が残っている')
 })
 
-test('前の大きさで出した行き先は捨てる', () => {
+test('前の大きさで出した行の動きは捨てる', () => {
   const lyrics = run(null)
-  assert.equal(lyrics._scrollTarget, undefined)
-  assert.equal(lyrics._scrollVel, 0)
+  assert.equal(lyrics._rowMotionReset, true)
 })
 
 test('見当違いな所から流さずに飛ばす', () => {
@@ -67,7 +64,7 @@ test('PIP を開いていれば PIP も直す', () => {
   const pip = makeContainer()
   run(pip)
   assert.equal(pip._lastScrolledIndex, -1)
-  assert.equal(pip._scrollTarget, undefined)
+  assert.equal(pip._rowMotionReset, true)
   assert.equal(pip._instantNextScroll, true)
 })
 

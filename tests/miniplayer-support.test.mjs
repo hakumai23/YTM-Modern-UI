@@ -16,10 +16,12 @@ const pip = read('src/js/module/pip-manager.js')
 const css = read('src/css/style.css')
 
 test('バーを探す所は新旧どちらも見る', () => {
-  assert.match(ui, /const PLAYER_BAR_SELECTOR = 'ytmusic-player-bar, ytmusic-miniplayer';/)
+  // 探すのは PlayerBar(player-bar.js)。知っている作りは新旧の両方
+  const bar = read('src/js/module/player-bar.js')
+  assert.match(bar, /\['ytmusic-player-bar', 'classic'\],\s*\['ytmusic-miniplayer', 'wiz'\],/)
   // 監視・余白クリック・動画モードの印・ボタンの置き場所の判断
-  assert.match(ui, /const targetNode = document\.querySelector\(PLAYER_BAR_SELECTOR\);/)
-  assert.match(ui, /function setupPlayerBarBlankClickGuard\(\) \{\s*const bar = document\.querySelector\(PLAYER_BAR_SELECTOR\);/)
+  assert.match(ui, /const targetNode = PlayerBar\.get\(\);/)
+  assert.match(ui, /function setupPlayerBarBlankClickGuard\(\) \{\s*const bar = PlayerBar\.get\(\);/)
   // 旧バー決め打ちで残るのは、旧バーのシークバーのホバー時刻だけ
   // (新しいバーは YTM 自身がホバー時刻を出す。見つからなければ 60 秒で探すのをやめる)
   const hover = ui.slice(ui.indexOf('const adjustHoverTimeInfoPosition'), ui.indexOf('const parseLRCNoFlag'))

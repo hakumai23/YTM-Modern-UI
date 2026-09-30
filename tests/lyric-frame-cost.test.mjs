@@ -99,6 +99,7 @@ function createHarness(lyricsData, charTimesByIndex = {}) {
     // 行を止める位置。CSS の指定が無い時の既定(中央)と同じ
     lyricAnchorOffset: (c, rowHeight) => (c.clientHeight / 2) - (rowHeight / 2),
     requestLyricScroll() {},
+    lyricRowScrollOffset: () => 0,
     suppressUserScrollDetection() {},
     clearTimeout() {},
     setTimeout() { return 1 },

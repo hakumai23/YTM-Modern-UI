@@ -4,3 +4,18 @@ node_modules/
 
 # Claude Code local settings
 .claude/
+
+# ローカルのエージェント用ファイル(.claude と同じ性質)
+.agents/
+
+# プロモ動画: 撮影素材・BGM・書き出し結果は重いので入れない(~/Movies/YTM-Immersion-promo/ に置く)
+promo-video/public/*.mp4
+promo-video/public/*.wav
+promo-video/public/*_card.png
+promo-video/public/*_pip.png
+promo-video/out/
+promo-video/build/
+promo-video/music/*.wav
+promo-video/capture/rec/
+promo-video/capture/*.mp4
+promo-video/capture/cap/

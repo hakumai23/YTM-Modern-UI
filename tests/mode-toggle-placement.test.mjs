@@ -18,7 +18,9 @@ const pickSrc = ui.slice(ui.indexOf('const MODE_TOGGLE_HOSTS = ['), ui.indexOf('
 const el = (name, shown = true) => ({ name, isConnected: true, getClientRects: () => (shown ? [{}] : []) })
 const pickWith = (nodes) => {
   const document = { querySelector: (s) => nodes[s] || null, body: el('body') }
-  const pick = new Function('document', 'PLAYER_BAR_SELECTOR', `${pickSrc}\nreturn pickModeToggleHost;`)(document, 'ytmusic-player-bar')
+  // バーは PlayerBar(player-bar.js)が探す。ここでは知っている作りの旧バーだけ
+  const PlayerBar = { get: () => nodes['ytmusic-player-bar'] || null }
+  const pick = new Function('document', 'window', 'PlayerBar', 'moviemode', `${pickSrc}\nreturn pickModeToggleHost;`)(document, {}, PlayerBar, false)
   const host = pick()
   return host && { name: host.el.name, how: host.how, ...(host.primary && host.el.name === 'right' ? { primary: true } : {}) }
 }
@@ -40,11 +42,12 @@ test('.right-controls-buttons が無くなっても右側の操作列に入れ�
   }), { name: 'rc', how: 'prepend' })
 })
 
-test('新しいバー(ytmusic-miniplayer)では右側の列の先頭に入れる', () => {
+test('新しいバー(ytmusic-miniplayer)では右側の列の一番端に入れる', () => {
+  // PR #114: IMMERSION は ⋮ メニューの右、バーの右端に寄せる
   assert.deepEqual(pickWith({
     'ytmusic-miniplayer .ytMusicMiniPlayerRightSection': el('right'),
     'ytmusic-player-bar': null,
-  }), { name: 'right', how: 'prepend', primary: true })
+  }), { name: 'right', how: 'append', primary: true })
 })
 
 test('置き場所が隠れていれば次の候補へ、見える所が無ければ浮かせる', () => {
