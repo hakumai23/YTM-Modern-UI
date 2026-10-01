@@ -455,8 +455,8 @@ const normalizeSearchTrackTitle = (s) => {
       fb_volume: "音量",
       fb_shuffle: "シャッフル",
       fb_minimize: "プレイヤーを閉じる",
+      fb_open_player: "プレイヤーを開く",
       fb_seek: "再生位置",
-      fb_notice: "YouTube Music の画面が変わったため、Immersion のプレイヤーで操作しています",
     },
     en: {
       unit_hour: "hours",
@@ -587,8 +587,8 @@ const normalizeSearchTrackTitle = (s) => {
       fb_volume: "Volume",
       fb_shuffle: "Shuffle",
       fb_minimize: "Close player",
+      fb_open_player: "Open player",
       fb_seek: "Seek",
-      fb_notice: "YouTube Music's player changed, so Immersion is providing its own controls",
     },
     ko: {
       unit_hour: "시간",
@@ -719,8 +719,8 @@ const normalizeSearchTrackTitle = (s) => {
       fb_volume: "볼륨",
       fb_shuffle: "셔플",
       fb_minimize: "플레이어 닫기",
+      fb_open_player: "플레이어 열기",
       fb_seek: "재생 위치",
-      fb_notice: "YouTube Music 화면이 바뀌어 Immersion 플레이어로 조작하고 있습니다",
     },
     zh: {
       unit_hour: "小时",
@@ -851,8 +851,8 @@ const normalizeSearchTrackTitle = (s) => {
       fb_volume: "音量",
       fb_shuffle: "随机播放",
       fb_minimize: "关闭播放器",
+      fb_open_player: "打开播放器",
       fb_seek: "播放进度",
-      fb_notice: "YouTube Music 界面已变化，正在使用 Immersion 播放器进行控制",
     }
   }; 
   

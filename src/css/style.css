@@ -310,15 +310,24 @@ body.ytm-custom-layout [data-ytmi-bar-path] {
 body.ytm-custom-layout ytmusic-nav-bar {
   visibility: visible !important;
   opacity: 0 !important;
-  pointer-events: auto !important;
+  /* 隠れている(透明な)間は押下を下へ通す。以前は透明なまま上端の広い範囲で
+     押下を受けていて、その下の Immersion のボタン(設定・Daily Replay・
+     曲 / 動画など。窓が狭いほど広く被る)や歌詞の行が押せなかった。
+     出すきっかけはカーソルの位置で見る(lyrics-ui.js の ytmi-nav-peek)。
+     出ている間は押せる */
+  pointer-events: none !important;
   position: fixed;
   top: 10px;
   /* 幅と位置は !important。新UI(新しいプレイヤーバー)の YTM は
      ytmusic-app-layout[is-wiz-miniplayer-enabled] > [slot="nav-bar"] で
      width: 100% を指定し、こちらより強い。左だけ 10% ずれて幅が画面いっぱいの
-     ままになり、右端(ログイン・アカウント)がはみ出して切れていた */
-  left: 10% !important;
-  width: 80% !important;
+     ままになり、右端(ログイン・アカウント)がはみ出して切れていた。
+     幅は画面の 80%(動画モードは 60%)。ただし中身(左のロゴ・検索欄・
+     右のボタン)が収まる 860px より狭くせず、画面からははみ出さない。
+     割合だけだと、窓が狭い時に右のボタンがナビバーの外へはみ出していた */
+  --ytmi-nav-width: min(max(80%, 860px), calc(100% - 24px));
+  left: calc((100% - var(--ytmi-nav-width)) / 2) !important;
+  width: var(--ytmi-nav-width) !important;
   height: 64px;
   background: rgba(15, 15, 15, 0.92) !important;
   /* backdrop-filter: blur(10px); */
@@ -337,8 +346,7 @@ body.ytm-custom-layout ytmusic-nav-bar {
 }
 
 body.ytm-custom-layout ytmusic-nav-bar.moviemode {
-  width: 60% !important;
-  left: 20% !important;
+  --ytmi-nav-width: min(max(60%, 860px), calc(100% - 24px));
 }
 
 body.ytm-custom-layout ytmusic-nav-bar.moviemode .center-content.ytmusic-nav-bar {
@@ -349,14 +357,17 @@ body.ytm-custom-layout ytmusic-nav-bar.moviemode .center-content.ytmusic-nav-bar
    最中でもカーソルが外れた瞬間に引っ込んでいた。
    実機の DOM で確認したとおり、検索が開くと ytmusic-search-box に
    opened、文字が入ると has-query が付く。それも出したままの条件にする。 */
+body.ytm-custom-layout.ytmi-nav-peek ytmusic-nav-bar,
 body.ytm-custom-layout ytmusic-nav-bar:hover,
 body.ytm-custom-layout ytmusic-nav-bar:focus-within,
 body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[opened]),
 body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[has-query]) {
   opacity: 1 !important;
+  pointer-events: auto !important;
   transform: translateY(0);
   transition-delay: 0s;
 }
+
 
 
 body.ytm-custom-layout ytmusic-nav-bar ytmusic-search-box {
@@ -369,6 +380,7 @@ body.ytm-custom-layout ytmusic-nav-bar .right-content {
   transition-delay: 0.5s;
 }
 
+body.ytm-custom-layout.ytmi-nav-peek ytmusic-nav-bar .right-content,
 body.ytm-custom-layout ytmusic-nav-bar:hover .right-content,
 body.ytm-custom-layout ytmusic-nav-bar:focus-within .right-content,
 body.ytm-custom-layout ytmusic-nav-bar:has(ytmusic-search-box[opened]) .right-content,
@@ -2275,6 +2287,14 @@ body.ytm-custom-layout [data-ytmi-bar="generic"] {
   display: none;
 }
 
+/* YTM がシークバーを押せなくしたので自前のバーに任せている間(player-bar.js の
+   ytmi-fallback-seek)は、YTM のバーを隠す。見えたままだと自前のバーの後ろに
+   透けて重なっていた(狭い窓の旧バー) */
+body.ytm-custom-layout.ytmi-fallback-seek [data-ytmi-bar] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
   --fb-s: var(--ytm-ui-scale, 1);
   position: fixed;
@@ -2475,7 +2495,7 @@ body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
   height: calc(24px * var(--fb-s));
 }
 
-/* 時刻。置き換わった直後の数秒だけ、ここに理由を文で出す */
+/* 時刻 */
 #ytmi-fallback-bar .ytmi-fb-center {
   position: relative;
   flex: 1 1 auto;
@@ -2485,8 +2505,7 @@ body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
   align-items: center;
 }
 
-#ytmi-fallback-bar .ytmi-fb-time,
-#ytmi-fallback-bar .ytmi-fb-notice {
+#ytmi-fallback-bar .ytmi-fb-time {
   font-size: calc(13px * var(--fb-s));
   font-weight: 500;
   line-height: 1.2;
@@ -2497,25 +2516,6 @@ body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar {
 
 #ytmi-fallback-bar .ytmi-fb-time {
   font-variant-numeric: tabular-nums;
-}
-
-#ytmi-fallback-bar .ytmi-fb-notice {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0;
-}
-
-#ytmi-fallback-bar.is-noticing .ytmi-fb-time {
-  opacity: 0;
-}
-
-#ytmi-fallback-bar.is-noticing .ytmi-fb-notice {
-  opacity: 1;
 }
 
 /* 音量。アイコンに乗せると左へスライダーが伸びる */
@@ -2749,7 +2749,7 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicSmallViewportMiniplayerLeftSec
   display: none !important;
 }
 
-/* ▼(プレイヤーを閉じる)。新バーには YTM の閉じるボタンが無いので、
+/* ▼(プレイヤーを閉じる)/ ▲(開く)。新バーには YTM の開閉ボタンが無いので、
    IMMERSION の右に足す(lyrics-ui.js の syncBarMinimize)。見た目は隣の
    字幕・音量・⋮ の丸いボタンに揃える */
 #ytmi-bar-minimize {
@@ -2769,8 +2769,8 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicSmallViewportMiniplayerLeftSec
   transition: background-color 0.15s ease;
 }
 
-/* 閉じた後、見張りが外すまで(広告中は tick が止まる)残らないように */
-body:not(.ytm-custom-layout) #ytmi-bar-minimize {
+/* ▼ は、閉じた後に見張りが外すまで(広告中は tick が止まる)残らないように */
+body:not(.ytm-custom-layout) #ytmi-bar-minimize[data-act="close"] {
   display: none;
 }
 
@@ -2794,6 +2794,30 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerTimeInfo {
   display: block !important;
   white-space: nowrap !important;
   color: #fff !important;
+}
+
+/* 新バーは「左 1fr・中 auto・右 1fr」の 3 列で、右の列は左と同じ幅に
+   決まる。中身(時刻・字幕・音量・⋮ に IMMERSION と ▼▲ を足したもの)が
+   収まらないと、右の列は左へはみ出して再生・リピートのボタンに重なり、
+   押せなかった(窓の幅 1000px 前後から。Immersion を閉じていても)。
+   右の列は中身より狭くしない。溢れた分は左の列(曲名)が譲る。
+   中の列は、余裕があれば今までどおり真ん中に来る */
+ytmusic-miniplayer:has(> .ytMusicMiniPlayerRightSection) {
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr) !important;
+}
+
+/* Immersion では左の列(曲名)を出さないので、列の間を詰めて場所を作る */
+body.ytm-custom-layout ytmusic-miniplayer {
+  column-gap: 24px !important;
+}
+
+/* それでも収まらない幅では、YTM と同じく時刻を隠す。バーは 95vw、
+   中の列 304px と右の列(時刻込み)約 344px に列の間と余白を足すと、
+   820px を切ったあたりで収まらなくなる */
+@media (max-width: 820px) {
+  body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerTimeInfo {
+    display: none !important;
+  }
 }
 
 /* 蟾ｦ蛛ｴ繧ｳ繝ｳ繝医Ο繝ｼ繝ｫ */
@@ -3010,10 +3034,34 @@ body:not(.ytm-custom-layout) ytmusic-player-bar .right-controls tp-yt-paper-icon
 
 @media (max-width: 615px) {
 
-  body.ytm-custom-layout ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar #right-controls-mweb,
-  ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar:has(#my-mode-toggle.active) #right-controls-mweb {
+  body.ytm-custom-layout ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar #right-controls-mweb {
     display: none !important;
     visibility: hidden !important;
+  }
+
+  /* 窓が狭い時の旧バー(Immersion の外・プレイヤーを畳んだ閲覧ページ)。
+     YTM は右側を小さな作り用(再生・次へ。#right-controls-mweb)に入れ替え、
+     普段の右側(字幕・その他・プレーヤー ページを開く)は隠す。上の
+     「.right-controls を flex で出す」が普段の右側も出し続け、どちらも grid の
+     同じ区画(end)に入って重なり、IMMERSION ボタンは押し出されて浮いていた。
+     以前は IMMERSION が入の時に小さな作りの方を隠していたが、それでは
+     再生・次へが無くなる。区画を 1 つ足して横に並べ、普段の右側は
+     IMMERSION と ▲(開く)だけにする(字幕・その他は YTM と同じく出さない) */
+  body:not(.ytm-custom-layout) ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar:not(.top-player-bar) {
+    grid-template-columns: auto minmax(0, 1fr) auto auto !important;
+    grid-template-areas: "start middle mweb end" !important;
+  }
+
+  body:not(.ytm-custom-layout) ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar:not(.top-player-bar) #right-controls-mweb {
+    grid-area: mweb !important;
+  }
+
+  body:not(.ytm-custom-layout) ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar:not(.top-player-bar) .right-controls-buttons > :not(#my-mode-toggle) {
+    display: none !important;
+  }
+
+  body:not(.ytm-custom-layout) ytmusic-app-layout:not([player-page-open]) ytmusic-player-bar:not(.top-player-bar) .right-controls #my-mode-toggle {
+    margin: 0 4px !important;
   }
 }
 
@@ -4510,12 +4558,17 @@ body.ytm-custom-layout ytmusic-player-bar tp-yt-paper-slider#progress-bar [role=
    20px を狙って止める必要があり、行き過ぎると隣のモニタへ抜ける。
    広げるだけだと今度は誤爆するので、JS 側で短い滞留を要求している
    (queue-manager.js の QUEUE_OPEN_DWELL_MS)。 */
+/* 右端の帯に乗せると Up Next が出る。帯は見えないまま一番上に乗るので、
+   上端(ナビバーと、動画モードで右上に出る「曲 / 動画」)とプレイヤーバーの
+   高さは避ける。画面の上から下まで覆っていた時は、右上の「動画」や、窓が
+   狭い時のプレイヤーバーの右端のボタンに被さって押せなかった。
+   バーは下から 40px、高さ 80px × UI サイズ(上の「プレイヤーバー全体」) */
 #ytm-queue-trigger {
   position: fixed;
-  top: 0;
+  top: 72px;
   right: 0;
+  bottom: calc(48px + 80px * var(--ytm-ui-scale));
   width: 52px;
-  height: 100vh;
   z-index: 9998;
   cursor: w-resize;
 }
@@ -4615,6 +4668,15 @@ body:not(.ytm-custom-layout) #ytm-queue-panel {
   background: rgba(255, 255, 255, 0.15);
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* 再生済みの曲(再生中の行より上。上へスクロールすると出てくる)は控えめに */
+.queue-item.past {
+  opacity: 0.5;
+}
+
+.queue-item.past:hover {
+  opacity: 1;
 }
 
 

@@ -24,6 +24,8 @@ const PlayerBar = (() => {
   const OWN_SELECTOR = '#ytm-custom-wrapper, #ytm-custom-bg, #my-mode-toggle, #ytmi-fallback-bar';
   // バーの中の「再生位置」。どの作りでもシークバーは必ずある
   const SLIDER_SELECTOR = '[role="slider"], input[type="range"], progress';
+  // 知っている作りのシークバー(旧バー / 新バー)
+  const KNOWN_SEEK_SELECTOR = 'tp-yt-paper-slider#progress-bar, input.ytMusicMiniPlayerProgressBar';
   const CONTROL_SELECTOR = 'button, [role="button"], a[href], input';
   // 形で探すのは重いので、知っている作りが見つからない時だけ、間を空けて
   const GENERIC_SCAN_INTERVAL_MS = 3000;
@@ -120,8 +122,15 @@ const PlayerBar = (() => {
   // シークバーを持っている > YTM が隠していない > 描かれている > 先に在る、の順で選ぶ。
   // 描かれているかは Immersion の CSS が出し直すので当てにならない。style 属性は
   // こちらからは --ytmi-bar-display しか触らないので、YTM の意図がそのまま読める。
+  // 旧バーの上端用(top-player-bar)はシークバーの要素を持つが、YTM の CSS で
+  // シークバー自体を display:none にしている。要素が在るだけで数えると、狭い
+  // 窓で下のバーと同点になり、シークバーも IMMERSION も見えない上端用を
+  // Immersion の下に浮かせていた(実機)。知っている作りなのでシークバーそのもの
+  // (音量のスライダーは数えない。旧バーはどちらにも出ている)を探し、それ自身が
+  // 消されていないかで見る(祖先のバーごと隠れていても、自身の display は変わらない)。
   const hiddenByYtm = (el) => !!el.style && (el.style.display === 'none' || el.style.visibility === 'hidden');
-  const rankKnown = (el) => (el.querySelector(SLIDER_SELECTOR) ? 4 : 0)
+  const hasSeekBar = (el) => [...el.querySelectorAll(KNOWN_SEEK_SELECTOR)].some(s => getComputedStyle(s).display !== 'none');
+  const rankKnown = (el) => (hasSeekBar(el) ? 4 : 0)
     + (hiddenByYtm(el) ? 0 : 2)
     + (isRendered(el) ? 1 : 0);
 
@@ -225,9 +234,22 @@ const PlayerBar = (() => {
   // YTM が「プレイヤーページを開いている間はバーを display:none にする」
   // ような作りに変えても出せるよう、見えていた時の display を控えておく。
   // CSS は Immersion 中だけ、控えた値で出す。
-  const rememberDisplay = (el) => {
+  // YTM は窓の幅でも並べ方を変える(新バーは狭い時の小さな作りだけ flex、
+  // ふだんは 3 列の grid)。Immersion を開いたまま窓を広げると、控えた flex が
+  // 残って 3 列が崩れ、右の列が再生ボタンに重なっていた。窓の大きさが
+  // 変わった時は probe で、控えた値の上書きを一瞬外して YTM 本来の値を読む
+  // (同じ処理の中で戻すので描かれない)。
+  const rememberDisplay = (el, probe = false) => {
     if (!el || !el.isConnected) return;
-    const d = getComputedStyle(el).display;
+    let d;
+    if (probe) {
+      const prev = el.style.getPropertyValue('--ytmi-bar-display');
+      if (prev) el.style.removeProperty('--ytmi-bar-display');
+      d = getComputedStyle(el).display;
+      if (prev) el.style.setProperty('--ytmi-bar-display', prev);
+    } else {
+      d = getComputedStyle(el).display;
+    }
     if (!d || d === 'none' || d === 'contents') return;
     if (el.style.getPropertyValue('--ytmi-bar-display') !== d) {
       el.style.setProperty('--ytmi-bar-display', d);
@@ -483,9 +505,6 @@ const PlayerBar = (() => {
   const parts = {};
   // バーを押さえている間の、曲内の時刻(離すまで video は動かさない)
   let dragTime = null;
-  // 置き換わったことを伝えるのは、ページを開いてから最初の 1 回だけ
-  let noticeShown = false;
-  let noticeTimer = null;
 
   const currentOffset = () => {
     const v = getVideo();
@@ -521,7 +540,6 @@ const PlayerBar = (() => {
         </div>
         <div class="ytmi-fb-center">
           <span class="ytmi-fb-time"></span>
-          <span class="ytmi-fb-notice" role="status" aria-live="polite"></span>
         </div>
         <div class="ytmi-fb-right">
           <div class="ytmi-fb-volume">
@@ -537,7 +555,7 @@ const PlayerBar = (() => {
       </div>`;
     for (const [key, sel] of Object.entries({
       fill: '.ytmi-fb-fill', scrub: '.ytmi-fb-scrub', hover: '.ytmi-fb-hover', tip: '.ytmi-fb-tip',
-      time: '.ytmi-fb-time', notice: '.ytmi-fb-notice',
+      time: '.ytmi-fb-time',
       play: '.ytmi-fb-play', mute: '.ytmi-fb-mute', volslider: '.ytmi-fb-volslider',
       volfill: '.ytmi-fb-volfill', minimize: '.ytmi-fb-minimize',
     })) parts[key] = bar.querySelector(sel);
@@ -575,22 +593,6 @@ const PlayerBar = (() => {
     set(bar.querySelector('[data-act="minimize"]'), label('fb_minimize', 'Close player'));
     parts.scrub.setAttribute('aria-label', label('fb_seek', 'Seek'));
     parts.volslider.setAttribute('aria-label', label('fb_volume', 'Volume'));
-    parts.notice.textContent = label('fb_notice', "YouTube Music's player changed, so Immersion is providing its own controls");
-  };
-
-  // ── 置き換わったことを伝える ──
-  // 浮いた吹き出しにはせず、時刻の欄に数秒だけ文で出して、時刻に戻す。
-  const NOTICE_MS = 6000;
-  const showNotice = () => {
-    if (noticeShown || !fallbackEl) return;
-    noticeShown = true;
-    fallbackEl.classList.add('is-noticing');
-    clearTimeout(noticeTimer);
-    noticeTimer = setTimeout(hideNotice, NOTICE_MS);
-  };
-  const hideNotice = () => {
-    clearTimeout(noticeTimer);
-    if (fallbackEl) fallbackEl.classList.remove('is-noticing');
   };
 
   // ── 進み具合(バー全体) ──
@@ -827,10 +829,8 @@ const PlayerBar = (() => {
     if (on) {
       buildFallback();
       paintAll();
-      showNotice();
       YTMLog.log('YTM Immersion: プレイヤーバーが押せないので、自前のバーを出す');
     } else {
-      hideNotice();
       stopFill();
     }
     document.body.classList.toggle('ytmi-fallback-bar-on', on);
@@ -844,14 +844,50 @@ const PlayerBar = (() => {
   // 押せなかった時だけ自前のバーを出す。押せるようになれば戻す。
   const FAIL_THRESHOLD = 2;
   let failCount = 0;
+  // YTM がシークバーを押せなくしている(disabled)。狭い窓の旧バーは、
+  // プレイヤーページを開いている間ミニ表示に変わり、シークバーを disabled に
+  // して並びも変える(シークはプレイヤーページの中で行う作り)。Immersion は
+  // そのプレイヤーページを覆うので、シークする手段が無くなっていた(実機)。
+  // ボタンは押せるので当たり判定では見分けられない。広告中は数えない
+  // (広告の間はシークできないのが普通)。
+  const seekDisabledByYtm = (bar) => {
+    const seek = bar && bar.querySelector(KNOWN_SEEK_SELECTOR);
+    if (!seek || !(seek.hasAttribute('disabled') || seek.getAttribute('aria-disabled') === 'true')) return false;
+    return !document.querySelector('.ad-showing, .ad-interrupting');
+  };
+  let fallbackForSeek = false;
+  let seekFailCount = 0;
+  // この理由で自前のバーを出している間は、YTM のバーを隠す(見えたままだと
+  // 自前のバーの後ろに透けて重なる)。押せない(潜っている)理由で出す時は
+  // 隠さない。隠すと、押せるように戻ったかを当たり判定で確かめられない
+  const setFallbackForSeek = (on) => {
+    fallbackForSeek = on;
+    document.body.classList.toggle('ytmi-fallback-seek', on);
+  };
   // 戻り値: 自前のバーの出し入れが変わったか
   const check = ({ shown, skip }) => {
     if (!shown) {
       failCount = 0;
+      seekFailCount = 0;
+      setFallbackForSeek(false);
+      return setFallback(false);
+    }
+    // 動画モードでバーが隠れていても判断できる(当たり判定を使わない)ので先に見る。
+    // 曲の切り替わりの一瞬だけ押せないこともあるので、続けて押せない時だけ
+    const bar = get();
+    if (seekDisabledByYtm(bar)) {
+      if (++seekFailCount < FAIL_THRESHOLD) return false;
+      setFallbackForSeek(true);
+      return setFallback(true);
+    }
+    seekFailCount = 0;
+    if (fallbackForSeek) {
+      // シークできるように戻った(窓を広げた等)。押せるかは改めて当たり判定で見る
+      setFallbackForSeek(false);
+      failCount = 0;
       return setFallback(false);
     }
     if (skip) return false;
-    const bar = get();
     const usable = bar ? probeUsable(bar, [fallbackEl, document.getElementById('my-mode-toggle')]) : false;
     if (usable === null) return false;
     if (usable) {

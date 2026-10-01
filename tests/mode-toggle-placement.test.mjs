@@ -117,3 +117,26 @@ test('浮かせたボタンは画面の隅に固定される', () => {
   const rule = css.slice(css.indexOf('#my-mode-toggle.ytm-mode-toggle-floating {'))
   assert.match(rule.slice(0, rule.indexOf('}')), /position: fixed;/)
 })
+
+test('置き場所が押下を下へ通す作り(新バーの右の列)でも、親のバーに当たるなら押せるとみなす', () => {
+  const src = ui.slice(ui.indexOf('const isHitTestable = (el) => {'), ui.indexOf('// 動画モードでは、YTM が操作の無い間'))
+  const node = (name, pe = 'auto') => {
+    const n = { name, pe, kids: [], contains: (o) => o === n || n.kids.some(k => k.contains(o)), closest: () => null }
+    return n
+  }
+  const html = node('html'); const bar = node('bar'); const right = node('right', 'none'); const wrapper = node('immersion-layer')
+  html.kids.push(bar, wrapper); bar.kids.push(right)
+  right.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 40 })
+  const check = (stack, el = right) => new Function('document', 'window', 'getComputedStyle', `${src}\nreturn isHitTestable;`)(
+    { elementsFromPoint: () => stack, documentElement: html, body: node('body') }, { innerWidth: 1000, innerHeight: 800 }, (e) => ({ pointerEvents: e.pe }))(el)
+  // 空いた所は下のバーに当たる → 覆われていない
+  assert.equal(check([bar, html]), true)
+  // Immersion の層が上に被さっている → 押せない
+  assert.equal(check([wrapper, bar, html]), false)
+  // 何にも当たらず html まで抜ける → 押せない
+  assert.equal(check([html]), false)
+  // 押下を通さない普通の置き場所で親に当たるのは、覆われているのと同じ(今までどおり)
+  const plain = node('plain'); bar.kids.push(plain)
+  plain.getBoundingClientRect = right.getBoundingClientRect
+  assert.equal(check([bar, html], plain), false)
+})

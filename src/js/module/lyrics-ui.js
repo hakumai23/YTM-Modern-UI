@@ -9085,6 +9085,8 @@ window.addEventListener('resize', () => {
     _sweepResizeTimer = null;
     invalidateLyricLineSweeps();
     recenterLyricsAfterResize();
+    // YTM が窓の幅でバーの並べ方(grid / flex)を変えるので、控えを取り直す
+    PlayerBar.rememberDisplay(PlayerBar.current(), true);
   }, 200);
 });
 
@@ -9679,7 +9681,14 @@ const isHitTestable = (el) => {
   const x = Math.min(window.innerWidth - 1, Math.max(0, r.left + r.width / 2));
   const y = Math.min(window.innerHeight - 1, Math.max(0, r.top + r.height / 2));
   const hit = document.elementsFromPoint(x, y).find(h => el.contains(h) || !h.closest('#my-mode-toggle'));
-  return !!hit && el.contains(hit);
+  if (!hit) return false;
+  if (el.contains(hit)) return true;
+  // 置き場所そのものが押下を下へ通す作り(新バーの右の列。空いた所は
+  // シークバーへ通す)では、空いた所を測ると自分の親(バー)に当たる。
+  // 外の層に覆われているのではないので押せるとみなす(以前はここで
+  // 「押せない」と判定し、IMMERSION ボタンがバーから外れて浮いていた)
+  return getComputedStyle(el).pointerEvents === 'none'
+    && hit !== document.documentElement && hit !== document.body && hit.contains(el);
 };
 // 動画モードでは、YTM が操作の無い間バーをわざと隠して押せなくする。
 // その間に当たり判定をすると、ボタンが浮いて出ては戻るを繰り返すので測らない。
@@ -9725,6 +9734,38 @@ const placeModeToggle = (btn, host) => {
     else host.el.appendChild(btn);
   }
 };
+
+// Immersion 中のナビバー(検索欄)を出すきっかけ。ナビバーは隠れている間
+// 押下を通す(下の Immersion のボタンや歌詞を塞がない)ので、:hover では
+// 出せない。カーソルがナビバーの高さ(上から NAV_PEEK_ZONE_PX)に入ったら
+// 出す。ただし入った所が押せるもの(Immersion のボタン・曲 / 動画・歌詞の行)
+// の上なら出さず、そのまま押せるようにする。以前は画面の一番上の細い帯に
+// 乗せた時だけ出していて、際まで持っていかないと出ないと言われた。
+// 出ている間はナビバー自身が押下を受け、:hover で出たままになる。
+// 下へ NAV_PEEK_RELEASE_PX を越えたら引っ込める(CSS で一拍置いて消える)。
+const NAV_PEEK_CLASS = 'ytmi-nav-peek';
+const NAV_PEEK_ZONE_PX = 72;
+const NAV_PEEK_RELEASE_PX = 96;
+const NAV_PEEK_SKIP_SELECTOR = 'button, a[href], input, select, textarea, [role="button"], [role="slider"], ytmusic-av-toggle, .lyric-line';
+let _navPeek = false;
+const setNavPeek = (on) => {
+  if (_navPeek === on) return;
+  _navPeek = on;
+  document.body.classList.toggle(NAV_PEEK_CLASS, on);
+};
+const onNavPeekMove = (e) => {
+  if (!document.body.classList.contains('ytm-custom-layout') || e.clientY > NAV_PEEK_RELEASE_PX) {
+    setNavPeek(false);
+    return;
+  }
+  if (_navPeek || e.clientY > NAV_PEEK_ZONE_PX) return;
+  const target = e.target;
+  if (target instanceof Element && !target.closest('ytmusic-nav-bar') && target.closest(NAV_PEEK_SKIP_SELECTOR)) return;
+  setNavPeek(true);
+};
+document.addEventListener('mousemove', onNavPeekMove, { passive: true });
+// 窓の外へ出た(上のタブ等へ)ら引っ込める
+document.documentElement.addEventListener('mouseleave', () => setNavPeek(false));
 
 // ── Immersion を出すかどうか ──────────────────────────────
 // config.mode は「プレイヤーページを Immersion で置き換える」の入切。
@@ -9809,16 +9850,28 @@ const toggleImmersionMode = () => {
 //     ページを開く時に履歴を積み、戻ると畳む。曲のリンクから直接開いた時に
 //     戻ると、YTM の外や読み込み直しになって再生が止まるので使わない
 //  4. どれもできない → Immersion を閉じる
+// 新バーの畳むボタンはプレイヤー(ytmusic-player)の中。動画モードの
+// Immersion はプレイヤーを自分の入れ物(#ytm-custom-wrapper)へ移し、閉じた
+// 後もそこに残るので、ytmusic-player-page の中だけを探すと見つからない。
+// 窓が狭い時は、プレイヤーページの左上の「プレーヤー ページを最小化」
+// (#collapse-button)で畳む作りで、ほかのボタンは描かれず押しても効かない
+// (広い窓ではその逆)。描かれているものを先に使う
 const YTM_COLLAPSE_SELECTORS = [
+  'ytmusic-player-page #collapse-button',
+  'ytmusic-player-bar[data-ytmi-bar] .toggle-player-page-button',
   'ytmusic-player-bar .toggle-player-page-button',
-  'ytmusic-player-page .player-minimize-button',
+  'ytmusic-player#player .player-minimize-button',
 ];
 const findYtmCollapseButton = () => {
+  let fallback = null;
   for (const selector of YTM_COLLAPSE_SELECTORS) {
     const host = document.querySelector(selector);
-    if (host) return host.querySelector('button') || host;
+    if (!host) continue;
+    const btn = host.querySelector('button') || host;
+    if (host.getClientRects().length) return btn;
+    if (!fallback) fallback = btn;
   }
-  return null;
+  return fallback;
 };
 const canGoBackInApp = () => {
   const nav = window.navigation;
@@ -9925,30 +9978,69 @@ const ensureModeToggle = (recheck) => {
   return btn;
 };
 
-// YTM のバーに並べる ▼(プレイヤーを閉じる)。旧バーには YTM の
-// 「プレーヤー ページを閉じる」がバーの中に在るが、新バー(ytmusic-miniplayer)
-// には無い。新バーで畳むボタン(ミニプレーヤーを開く)はプレイヤーの上端に
-// 在り、Immersion の下に隠れるので、Immersion を開くと閉じる手段が
-// 見えなくなっていた。YTM の閉じるボタンが無いバーでは IMMERSION の右に出す。
+// YTM のバーに並べる ▼(プレイヤーを閉じる)/ ▲(プレイヤーを開く)。
+// 旧バーには YTM の「プレーヤー ページを閉じる/開く」がバーの中に在るが、
+// 新バー(ytmusic-miniplayer)には無い。新バーで畳むボタン(ミニプレーヤーを
+// 開く)はプレイヤーの上端に在り、Immersion の下に隠れるので、Immersion を
+// 開くと閉じる手段が見えなくなっていた。開くボタン(プレーヤー ページを開く)
+// は右下の小さな動画に乗せた時だけ出るので、閉じた後に戻る手段が見つからない
+// と報告があった。YTM の開閉ボタンが無いバーでは IMMERSION の右に出す:
+//  ・Immersion を出している間 → ▼。押すと畳む(minimizeImmersion)
+//  ・プレイヤーページを畳んで何か再生している間 → ▲。押すと開く
 // 自前のバーは自分の ▼ を持ち、浮いている IMMERSION には並べない。
 const BAR_MINIMIZE_ID = 'ytmi-bar-minimize';
-const BAR_MINIMIZE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg>';
+const BAR_PLAYER_ICONS = {
+  close: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg>',
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 14 5-5 5 5"/></svg>',
+};
+const BAR_PLAYER_LABELS = { close: 'fb_minimize', open: 'fb_open_player' };
+// YTM の「プレーヤー ページを開く」。見えていなくてもプログラムからは押せる
+// (右下の小さな動画に乗せた時だけ出るボタン)。畳むボタンと同じく、
+// プレイヤーが Immersion の入れ物に移っていても見つかるように探す
+const findYtmExpandButton = () => {
+  const host = document.querySelector('ytmusic-player#player .player-maximize-button');
+  return host ? (host.querySelector('button') || host) : null;
+};
+// ▲: YTM の開くボタンを押す。押しても開かなければ、Immersion が入なら
+// 閲覧ページの上に出す(IMMERSION ボタンと同じ)
+const openPlayerFromBar = () => {
+  const btn = findYtmExpandButton();
+  if (btn) btn.click();
+  requestImmersionTick();
+  setTimeout(() => {
+    if (readPlayerPageOpen() || document.body.classList.contains('ytm-custom-layout')) return;
+    if (config.mode) setImmersionOpen(true);
+  }, btn ? MINIMIZE_CONFIRM_MS : 0);
+};
+const barPlayerAction = (toggle) => {
+  if (!toggle.isConnected || toggle.classList.contains(MODE_TOGGLE_FLOATING_CLASS)
+    || toggle.closest('#ytmi-fallback-bar')) return null;
+  const bar = PlayerBar.get();
+  if (!bar || !bar.contains(toggle) || bar.querySelector('.toggle-player-page-button')) return null;
+  if (canMinimizeImmersion()) return 'close';
+  if (!readPlayerPageOpen() && isPlayingSomething()) return 'open';
+  return null;
+};
 const syncBarMinimize = (toggle) => {
   let el = document.getElementById(BAR_MINIMIZE_ID);
-  const bar = toggle.isConnected && !toggle.classList.contains(MODE_TOGGLE_FLOATING_CLASS)
-    && !toggle.closest('#ytmi-fallback-bar') ? PlayerBar.get() : null;
-  const want = !!bar && bar.contains(toggle) && canMinimizeImmersion()
-    && !bar.querySelector('.toggle-player-page-button');
-  if (!want) {
+  const act = barPlayerAction(toggle);
+  if (!act) {
     if (el) el.remove();
     return;
   }
   if (!el) {
-    el = createEl('button', BAR_MINIMIZE_ID, '', BAR_MINIMIZE_ICON);
+    el = createEl('button', BAR_MINIMIZE_ID, '', '');
     el.type = 'button';
-    el.onclick = minimizeImmersion;
+    el.onclick = () => {
+      if (el.dataset.act === 'open') openPlayerFromBar();
+      else minimizeImmersion();
+    };
   }
-  const text = t('fb_minimize');
+  if (el.dataset.act !== act) {
+    el.dataset.act = act;
+    el.innerHTML = BAR_PLAYER_ICONS[act];
+  }
+  const text = t(BAR_PLAYER_LABELS[act]);
   if (el.title !== text) {
     el.title = text;
     el.setAttribute('aria-label', text);

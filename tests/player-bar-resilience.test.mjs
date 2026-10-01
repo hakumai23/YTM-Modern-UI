@@ -37,6 +37,16 @@ class El {
     this.style = { props: {}, setProperty(k, v) { this.props[k] = v }, getPropertyValue(k) { return this.props[k] || '' } }
     this.className = ''
   }
+  get classList() {
+    const el = this
+    const list = () => String(el.className).split(/\s+/).filter(Boolean)
+    return {
+      contains: (c) => list().includes(c),
+      add: (c) => { if (!list().includes(c)) el.className = [...list(), c].join(' ') },
+      remove: (c) => { el.className = list().filter(x => x !== c).join(' ') },
+      toggle: (c, on) => { const has = list().includes(c); const want = on === undefined ? !has : !!on; if (want !== has) el.className = want ? [...list(), c].join(' ') : list().filter(x => x !== c).join(' '); return want },
+    }
+  }
   get isConnected() { let e = this; while (e.parentElement) e = e.parentElement; return e.tagName === 'HTML' }
   append(...kids) { kids.forEach(k => { k.parentElement = this; this.children.push(k) }); return this }
   setAttribute(k, v) { this.attrs[k] = String(v) }
@@ -231,7 +241,7 @@ test('続けて押せなかった時だけ自前のバーを出し、押せる�
   assert.match(src, /failCount = 0;\s*return setFallback\(false\);/)
   assert.match(src, /if \(failCount >= FAIL_THRESHOLD\) return setFallback\(true\);/)
   // 閉じている間は必ず引っ込める
-  assert.match(src, /if \(!shown\) \{\s*failCount = 0;\s*return setFallback\(false\);/)
+  assert.match(src, /if \(!shown\) \{\s*failCount = 0;\s*seekFailCount = 0;\s*setFallbackForSeek\(false\);\s*return setFallback\(false\);/)
 })
 
 test('自前のバーは YTM の DOM に頼らず、<video> と YTM のキー操作で動く', () => {
@@ -443,7 +453,10 @@ test('▼(プレイヤーを畳む)はいつも出し、使える中で一番よ
   // 1. 閲覧ページの上なら隠すだけ
   assert.match(min, /if \(!readPlayerPageOpen\(\)\) \{\s*_immersionManualOpen = false;/)
   // 2. YTM の畳むボタン(旧バーの ▼ / 新バーのプレイヤーページの最小化)
-  assert.match(ui, /'ytmusic-player-bar \.toggle-player-page-button',\s*'ytmusic-player-page \.player-minimize-button',/)
+  assert.match(ui, /'ytmusic-player-page #collapse-button',\s*'ytmusic-player-bar\[data-ytmi-bar\] \.toggle-player-page-button',\s*'ytmusic-player-bar \.toggle-player-page-button',\s*'ytmusic-player#player \.player-minimize-button',/)
+  // 窓の幅で効くボタンが変わるので、描かれているものを先に使う
+  const find = ui.slice(ui.indexOf('const findYtmCollapseButton = () => {'), ui.indexOf('const canGoBackInApp'))
+  assert.match(find, /if \(host\.getClientRects\(\)\.length\) return btn;/)
   assert.match(min, /btn\.click\(\);[\s\S]*setTimeout\(fallback, MINIMIZE_CONFIRM_MS\);/)
   // 3. 畳まれなければ、YTM の中へ読み込み直さずに戻れる時だけ「戻る」、4. だめなら閉じる
   assert.match(min, /if \(canGoBackInApp\(\)\) history\.back\(\);\s*else setImmersionOpen\(false\);/)
@@ -479,14 +492,10 @@ test('バーを満たす色は、ジャケットの真ん中(主役)で一番広
   assert.match(css, /:root\[style\*="--ytmi-tint"\] #ytmi-fallback-bar \.ytmi-fb-fill \{\s*background-color: rgb\(var\(--ytmi-tint\)\);/)
 })
 
-test('置き換わったことは、ページを開いてから最初の 1 回だけ、時刻の欄に文で伝える', () => {
-  const notice = barSrc.slice(barSrc.indexOf('const showNotice = () => {'), barSrc.indexOf('const hideNotice = () => {'))
-  assert.match(notice, /if \(noticeShown \|\| !fallbackEl\) return;\s*noticeShown = true;/)
-  assert.match(notice, /setTimeout\(hideNotice, NOTICE_MS\)/)
-  assert.match(barSrc, /class="ytmi-fb-notice" role="status" aria-live="polite"/)
-  assert.match(css, /#ytmi-fallback-bar\.is-noticing \.ytmi-fb-time \{\s*opacity: 0;/)
-  const ns = read('src/js/module/namespace.js')
-  assert.equal((ns.match(/fb_notice: /g) || []).length, 4, '4 言語')
+test('自前のバーに切り替わっても、理由の文は出さない(時刻の欄はいつも時刻)', () => {
+  assert.doesNotMatch(barSrc, /ytmi-fb-notice|showNotice|is-noticing/)
+  assert.doesNotMatch(css, /ytmi-fb-notice|is-noticing/)
+  assert.doesNotMatch(read('src/js/module/namespace.js'), /fb_notice:/)
 })
 
 test('GPU を無駄に使わない: すりガラスを使わず、進み具合は transform のアニメーション 1 本', () => {
@@ -530,6 +539,7 @@ const twinWorld = ({ topRendered }) => {
   top.append(new El('button'), new El('button'))
   page.append(top)
   const main = barLike('ytmusic-miniplayer')
+  main.querySelector('input').className = 'ytMusicMiniPlayerProgressBar'
   w.layout.append(page, main)
   return { ...w, top, main }
 }
@@ -653,11 +663,12 @@ test('☆: PiP は player-bar.js の高評価を使い、押した後は何度�
   assert.doesNotMatch(pip, /ytmusic-player-bar ytmusic-like-button-renderer/)
 })
 
-// ── バーの ▼(プレイヤーを閉じる)──────────────────────────
-// 新バー(ytmusic-miniplayer)には旧バーの「プレーヤー ページを閉じる」が無く、
-// YTM の畳むボタンはプレイヤーの上端(Immersion の下)にしか無いので、
-// Immersion を開くと閉じる手段が見えなかった。
-const barMinimizeWorld = ({ shown = true, floating = false, inFallback = false, ytmCollapse = false, inBar = true } = {}) => {
+// ── バーの ▼(プレイヤーを閉じる)/ ▲(開く)───────────────
+// 新バー(ytmusic-miniplayer)には旧バーの「プレーヤー ページを閉じる/開く」が
+// 無く、YTM の畳むボタンはプレイヤーの上端(Immersion の下)、開くボタンは
+// 右下の小さな動画に乗せた時だけ出る。閉じる手段も、閉じた後に戻る手段も
+// 見つからなかった。
+const barMinimizeWorld = ({ shown = true, floating = false, inFallback = false, ytmCollapse = false, inBar = true, pageOpen = true, playing = true, expandBtn = true, mode = true } = {}) => {
   const src = ui.slice(ui.indexOf("const BAR_MINIMIZE_ID = "), ui.indexOf('const tick = async'))
   const byId = {}
   const toggle = {
@@ -665,37 +676,49 @@ const barMinimizeWorld = ({ shown = true, floating = false, inFallback = false, 
     nextElementSibling: null,
     classList: { contains: (c) => floating && c === 'ytm-mode-toggle-floating' },
     closest: (s) => (inFallback && s === '#ytmi-fallback-bar' ? {} : null),
-    after: (el) => { toggle.nextElementSibling = el; el.parentElement = toggle.parentElement; byId[el.id] = el },
+    after: (el) => { toggle.nextElementSibling = el; byId[el.id] = el },
   }
   const bar = {
     contains: (el) => inBar && el === toggle,
     querySelector: (s) => (ytmCollapse && s === '.toggle-player-page-button' ? {} : null),
   }
-  const minimized = []
-  const createEl = (tag, id, cls, html) => {
+  const log = []
+  const state = { shown, pageOpen }
+  const expand = { click: () => { log.push('ytm-expand'); state.pageOpen = true } }
+  const createEl = (tag, id) => {
     const attrs = {}
-    const el = { tagName: tag.toUpperCase(), id, innerHTML: html, title: '', setAttribute: (k, v) => { attrs[k] = v }, attrs }
+    const el = { tagName: tag.toUpperCase(), id, innerHTML: '', title: '', dataset: {}, setAttribute: (k, v) => { attrs[k] = v }, attrs }
     el.remove = () => { delete byId[el.id]; if (toggle.nextElementSibling === el) toggle.nextElementSibling = null }
     return el
   }
-  const document = { getElementById: (id) => byId[id] || null }
-  const sync = new Function('document', 'PlayerBar', 'canMinimizeImmersion', 'MODE_TOGGLE_FLOATING_CLASS', 'createEl', 'minimizeImmersion', 't',
+  const document = {
+    getElementById: (id) => byId[id] || null,
+    querySelector: (s) => (expandBtn && s === 'ytmusic-player#player .player-maximize-button' ? { querySelector: () => expand } : null),
+    body: { classList: { contains: (c) => c === 'ytm-custom-layout' && state.shown } },
+  }
+  const timers = []
+  const labels = { fb_minimize: 'プレイヤーを閉じる', fb_open_player: 'プレイヤーを開く' }
+  const sync = new Function('document', 'PlayerBar', 'canMinimizeImmersion', 'readPlayerPageOpen', 'isPlayingSomething',
+    'MODE_TOGGLE_FLOATING_CLASS', 'MINIMIZE_CONFIRM_MS', 'createEl', 'minimizeImmersion', 'setImmersionOpen', 'requestImmersionTick', 'setTimeout', 'config', 't',
     `${src}\nreturn syncBarMinimize;`)(
-    document, { get: () => bar }, () => shown, 'ytm-mode-toggle-floating', createEl,
-    () => minimized.push(1), (k) => (k === 'fb_minimize' ? 'プレイヤーを閉じる' : k))
-  return { sync, toggle, byId, minimized }
+    document, { get: () => bar }, () => state.shown, () => state.pageOpen, () => playing,
+    'ytm-mode-toggle-floating', 700, createEl, () => log.push('minimize'), (v) => log.push('immersion:' + v), () => {},
+    (fn) => timers.push(fn), { mode }, (k) => labels[k] || k)
+  return { sync, toggle, byId, log, state, flush: () => timers.splice(0).forEach(fn => fn()) }
 }
 
-test('▼: YTM の閉じるボタンが無いバー(新バー)では IMMERSION の右に出し、押すと畳む', () => {
+test('▼: YTM の開閉ボタンが無いバー(新バー)では、Immersion 中は IMMERSION の右に ▼ を出し、押すと畳む', () => {
   const w = barMinimizeWorld()
   w.sync(w.toggle)
   const el = w.byId['ytmi-bar-minimize']
   assert.ok(el)
   assert.equal(w.toggle.nextElementSibling, el)
+  assert.equal(el.dataset.act, 'close')
+  assert.match(el.innerHTML, /m7 10 5 5 5-5/)
   assert.equal(el.title, 'プレイヤーを閉じる')
   assert.equal(el.attrs['aria-label'], 'プレイヤーを閉じる')
   el.onclick()
-  assert.equal(w.minimized.length, 1)
+  assert.deepEqual(w.log, ['minimize'])
   // 何度呼んでも 1 つだけ
   w.sync(w.toggle)
   assert.equal(w.toggle.nextElementSibling, el)
@@ -704,27 +727,142 @@ test('▼: YTM の閉じるボタンが無いバー(新バー)では IMMERSION �
   assert.equal((ensure.match(/syncBarMinimize\(btn\);/g) || []).length, 2)
 })
 
-test('▼: 旧バー(YTM の ▼ が在る)・自前のバー・浮いた IMMERSION・閉じている間は出さない', () => {
-  for (const opts of [{ ytmCollapse: true }, { inFallback: true }, { floating: true }, { shown: false }, { inBar: false }]) {
+test('▲: 畳んだ後は同じ所に ▲ を出し、押すと YTM の「プレーヤー ページを開く」を押す', () => {
+  const w = barMinimizeWorld()
+  w.sync(w.toggle)
+  const el = w.byId['ytmi-bar-minimize']
+  // 畳まれた(Immersion も閉じた)
+  w.state.shown = false
+  w.state.pageOpen = false
+  w.sync(w.toggle)
+  assert.equal(w.byId['ytmi-bar-minimize'], el)
+  assert.equal(el.dataset.act, 'open')
+  assert.match(el.innerHTML, /m7 14 5-5 5 5/)
+  assert.equal(el.title, 'プレイヤーを開く')
+  el.onclick()
+  assert.deepEqual(w.log, ['ytm-expand'])
+  // 開けたので、それ以上は何もしない
+  w.flush()
+  assert.deepEqual(w.log, ['ytm-expand'])
+})
+
+test('▲: YTM の開くボタンで開かなければ、Immersion が入なら閲覧ページの上に出す', () => {
+  for (const [opts, expected] of [
+    [{ expandBtn: false }, ['immersion:true']],
+    [{ expandBtn: false, mode: false }, []],
+  ]) {
+    const w = barMinimizeWorld({ shown: false, pageOpen: false, ...opts })
+    w.sync(w.toggle)
+    w.byId['ytmi-bar-minimize'].onclick()
+    w.flush()
+    assert.deepEqual(w.log, expected, JSON.stringify(opts))
+  }
+})
+
+test('▼/▲: 旧バー(YTM の ▼▲ が在る)・自前のバー・浮いた IMMERSION では出さない。何も再生していない時・プレイヤーページを Immersion なしで開いている時も', () => {
+  for (const opts of [{ ytmCollapse: true }, { inFallback: true }, { floating: true }, { inBar: false },
+    { shown: false, pageOpen: false, playing: false }, { shown: false, pageOpen: true }]) {
     const w = barMinimizeWorld(opts)
     w.sync(w.toggle)
     assert.equal(w.byId['ytmi-bar-minimize'], undefined, JSON.stringify(opts))
   }
-  // 出ていたものは、Immersion を閉じたら外す
+  // 出ていたものは、要らなくなったら外す
   const w = barMinimizeWorld()
   w.sync(w.toggle)
-  assert.ok(w.byId['ytmi-bar-minimize'])
-  const off = barMinimizeWorld({ shown: false })
-  off.byId['ytmi-bar-minimize'] = w.byId['ytmi-bar-minimize']
   let removed = false
-  off.byId['ytmi-bar-minimize'].remove = () => { removed = true }
-  off.sync(off.toggle)
+  w.byId['ytmi-bar-minimize'].remove = () => { removed = true }
+  w.state.shown = false
+  w.sync(w.toggle)
   assert.ok(removed)
-  // 広告中は tick が止まって外せないので、CSS でも隠す
-  assert.match(css, /body:not\(\.ytm-custom-layout\) #ytmi-bar-minimize \{\s*display: none;/)
+  // 広告中は tick が止まって外せないので、▼ は CSS でも隠す
+  assert.match(css, /body:not\(\.ytm-custom-layout\) #ytmi-bar-minimize\[data-act="close"\] \{\s*display: none;/)
 })
 
 test('狭い窓の新バーでは、小さな作りを全列に広げて IMMERSION と ▼ を切らない', () => {
   assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicSmallViewportMiniplayerHost \{\s*grid-column: 1 \/ -1 !important;/)
   assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicSmallViewportMiniplayerLeftSection \{\s*display: none !important;/)
+})
+
+test('窓の大きさが変わったら、Immersion 中でも YTM 本来の display を取り直す(新バーの grid / flex)', () => {
+  const w = makeWorld()
+  const bar = new El('div')
+  w.layout.append(bar)
+  // Immersion の CSS は控えた値(--ytmi-bar-display)で上書きする。上書きを外すと YTM の値に戻る
+  let ytmDisplay = 'flex'
+  bar.style.removeProperty = function (k) { delete this.props[k] }
+  Object.defineProperty(bar, 'computed', { get: () => ({ display: bar.style.getPropertyValue('--ytmi-bar-display') || ytmDisplay }) })
+  // 狭い窓(小さな作り)で控えた
+  w.PlayerBar.rememberDisplay(bar)
+  assert.equal(bar.style.getPropertyValue('--ytmi-bar-display'), 'flex')
+  // Immersion を開いたまま窓を広げた → YTM は grid に戻すが、上書きのせいで見えない
+  ytmDisplay = 'grid'
+  w.PlayerBar.rememberDisplay(bar)
+  assert.equal(bar.style.getPropertyValue('--ytmi-bar-display'), 'flex')
+  // 窓の大きさが変わった時は、上書きを外して読む
+  w.PlayerBar.rememberDisplay(bar, true)
+  assert.equal(bar.style.getPropertyValue('--ytmi-bar-display'), 'grid')
+  // YTM が隠している(none)時は前の値を残す
+  ytmDisplay = 'none'
+  w.PlayerBar.rememberDisplay(bar, true)
+  assert.equal(bar.style.getPropertyValue('--ytmi-bar-display'), 'grid')
+  assert.match(ui, /recenterLyricsAfterResize\(\);\s*\/\/[^\n]*\n\s*PlayerBar\.rememberDisplay\(PlayerBar\.current\(\), true\);/)
+})
+
+test('旧バーが 2 つ在る時(狭い窓)、シークバーを消されている上端用ではなく下のバーを使う', () => {
+  const w = makeWorld()
+  const page = new El('ytmusic-player-page', { id: 'player-page' })
+  // どちらにも音量のスライダーが出ている(シークバーとは数えない)
+  const seekBar = () => new El('tp-yt-paper-slider', { id: 'progress-bar', attrs: { role: 'slider' } })
+  // 上端用: シークバーの要素は在るが、YTM の CSS で display:none
+  const top = barLike('ytmusic-player-bar')
+  top.className = 'top-player-bar'
+  const topSeek = seekBar()
+  topSeek.computed.display = 'none'
+  top.append(topSeek)
+  page.append(top)
+  // 下のバー: YTM が visibility:hidden を付けて使っていない
+  const main = barLike('ytmusic-player-bar')
+  main.append(seekBar())
+  main.style.visibility = 'hidden'
+  w.layout.append(page, main)
+  assert.equal(w.PlayerBar.get(), main)
+  assert.equal(w.PlayerBar.variant(), 'classic')
+})
+
+test('YTM がシークバーを押せなくしていたら(狭い窓の旧バーのミニ表示)、Immersion では自前のバーに任せる', () => {
+  const w = makeWorld()
+  const bar = barLike('ytmusic-player-bar')
+  const seek = new El('tp-yt-paper-slider', { id: 'progress-bar', attrs: { role: 'slider' } })
+  bar.append(seek)
+  w.layout.append(bar)
+  // 押せる(当たり判定は通る)
+  w.document.elementsFromPoint = () => [bar.children[0]]
+  // 自前のバーを組む所(DOM)は偽の DOM では動かないので、出し入れの結果だけを見る
+  w.document.createElement = (tag) => new El(tag)
+  const run = (opts) => { try { w.PlayerBar.check(opts) } catch (e) { /* 組み立ての途中 */ } return w.PlayerBar.isFallbackOn() }
+  assert.equal(run({ shown: true, skip: false }), false)
+  // YTM が disabled にした。1 回目は待つ(曲の切り替わりの一瞬かもしれない)
+  seek.setAttribute('disabled', '')
+  assert.equal(run({ shown: true, skip: true }), false)
+  // 続けて押せない → 動画モード(skip)でも自前のバーへ
+  assert.equal(run({ shown: true, skip: true }), true)
+  // その間は YTM のバーを隠す(後ろに透けて重なる)
+  assert.equal(w.body.classList.contains('ytmi-fallback-seek'), true)
+  assert.match(css, /body\.ytm-custom-layout\.ytmi-fallback-seek \[data-ytmi-bar\] \{\s*visibility: hidden !important;\s*pointer-events: none !important;/)
+  // シークできるように戻れば引っ込める
+  seek.removeAttribute('disabled')
+  assert.equal(run({ shown: true, skip: true }), false)
+  assert.equal(w.body.classList.contains('ytmi-fallback-seek'), false)
+  // 広告中は数えない
+  const w2 = makeWorld()
+  const bar2 = barLike('ytmusic-player-bar')
+  const seek2 = new El('tp-yt-paper-slider', { id: 'progress-bar', attrs: { role: 'slider', disabled: '' } })
+  bar2.append(seek2)
+  const ad = new El('div')
+  ad.className = 'ad-showing'
+  w2.layout.append(bar2, ad)
+  w2.document.elementsFromPoint = () => [bar2.children[0]]
+  w2.PlayerBar.check({ shown: true, skip: false })
+  w2.PlayerBar.check({ shown: true, skip: false })
+  assert.equal(w2.PlayerBar.isFallbackOn(), false)
 })

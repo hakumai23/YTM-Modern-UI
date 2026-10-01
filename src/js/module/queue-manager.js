@@ -415,27 +415,43 @@ const QUEUE_OPEN_DWELL_MS = 160;
         currentIndex = 0;
       }
 
+      // 再生済みの曲(YTM のキューで再生中より前)も上に並べる。描き直した時は
+      // 再生中の曲を一番上に合わせるので、開いた時の見え方は今までどおりで、
+      // 上へスクロールするとキューを遡れる。
+      const pastItems = visibleItems.slice(0, currentIndex);
       const targetItems = visibleItems.slice(currentIndex);
 
       // 中身が変わっていないのに innerHTML を作り直すと、スクロール位置が戻り
       // クリックハンドラも張り直しになる。署名で差分を見て無駄な再構築を避ける。
-      const signature = targetItems.map(item => {
+      const itemSignature = (item) => {
         const t = item.querySelector('.song-title');
         return `${this._extractVideoIdFromQueueItem(item) || ''}:${t ? t.textContent.trim() : ''}`;
-      }).join('|');
+      };
+      const signature = targetItems.length
+        ? `${pastItems.map(itemSignature).join('|')}#${targetItems.map(itemSignature).join('|')}`
+        : '';
       if (signature && signature === this._renderedSignature) return;
       this._renderedSignature = signature;
 
       container.innerHTML = '';
-      const seenIds = new Set();
       const queueIndex = this._buildQueueIndex();
 
+      // 再生済みの行。先読みはしない。重複は再生済みの中だけで除く
+      // (これから流れる曲と同じ曲が前にあっても消さない)
+      const seenPast = new Set();
+      pastItems.forEach((item) => {
+        const row = this._buildQueueRow(item, queueIndex, { past: true });
+        if (!row || seenPast.has(row.dedupeKey)) return;
+        seenPast.add(row.dedupeKey);
+        container.appendChild(row.el);
+        this._applyLoadedLyricsHighlight(row.el, row.el.dataset.lyricsKey);
+      });
+
+      const seenIds = new Set();
       let renderedCount = 0;
-      targetItems.forEach((item, idx) => {
+      targetItems.forEach((item) => {
         const titleEl = item.querySelector('.song-title');
         const artistEl = item.querySelector('.byline');
-        const imgEl = item.querySelector('.thumbnail img');
-
         if (!titleEl) return;
 
         const title = titleEl.textContent.trim();
@@ -479,69 +495,94 @@ const QUEUE_OPEN_DWELL_MS = 160;
         }
         renderedCount += 1;
 
-        const uniqueKey = `${title}///${artist}`;
-
-        // YTM のキューはサムネイルを遅延読み込みしており、画面外の行の img は
-        // 1x1 の透明 GIF (data:) のまま。実測では最初はキュー全行がこの状態で、
-        // そのままだと Up Next のジャケットがほぼ全部プレースホルダになる。
-        //   1. DOM が本物を持っていればそれ(正方形のアートワーク)
-        //   2. InnerTube のキューにあるアートワーク URL
-        //   3. videoId から i.ytimg.com のサムネイル
-        let src = '';
-        if (imgEl && imgEl.src && !imgEl.src.startsWith('data:')) {
-          src = imgEl.src;
-        } else if (queueEntry && queueEntry.thumbnail) {
-          src = queueEntry.thumbnail;
-        } else if (videoId) {
-          src = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
-        }
-
-        const row = createEl('div', '', `queue-item ${isPlaying ? 'current' : ''}`);
-
-        const imgHtml = src
-          ? `<img src="${src}" loading="lazy">`
-          : `<div class="queue-img-fallback">♪</div>`;
-
-        const indicatorHtml = isPlaying
-          ? `<div class="queue-playing-indicator"><i></i><i></i><i></i></div>`
-          : '';
-
-        row.innerHTML = `
-          <div class="queue-img">
-            ${imgHtml}
-            ${indicatorHtml}
-          </div>
-          <div class="queue-info">
-            <div class="queue-title">${this._escapeHtml(title)}</div>
-            <div class="queue-artist">${this._escapeHtml(bylineText)}</div>
-          </div>
-        `;
-
-        // サムネイルが 404 等で落ちた時だけ記号に差し替える。
-        // インラインの onerror は YTM の CSP で実行されないので、必ずここで張る。
-        const rowImg = row.querySelector('.queue-img img');
-        if (rowImg) {
-          rowImg.addEventListener('error', () => {
-            const fallback = createEl('div', '', 'queue-img-fallback', '♪');
-            rowImg.replaceWith(fallback);
-          }, { once: true });
-        }
-
-        row.onclick = (e) => {
-          e.stopPropagation();
-          const playButton = item.querySelector('.play-button') || item.querySelector('ytmusic-play-button-renderer');
-          if (playButton) {
-            playButton.click();
-          } else {
-            item.click();
-          }
-          setTimeout(() => this.syncQueue(), 500);
-        };
-
-        row.dataset.lyricsKey = uniqueKey;
-        container.appendChild(row);
-
-        this._applyLoadedLyricsHighlight(row, uniqueKey);
+        const row = this._buildQueueRow(item, queueIndex, { playing: isPlaying });
+        container.appendChild(row.el);
+        this._applyLoadedLyricsHighlight(row.el, row.el.dataset.lyricsKey);
       });
+
+      // 再生中の曲を一番上に合わせる(その上が再生済み)
+      const current = container.querySelector('.queue-item.current');
+      if (current) {
+        container.scrollTop += current.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      }
+    },
+
+    // キューの 1 行。再生中(playing)・再生済み(past)で見た目だけ変える。
+    // 押すと YTM のキューのその曲を再生する。
+    _buildQueueRow: function (item, queueIndex, { playing = false, past = false } = {}) {
+      const titleEl = item.querySelector('.song-title');
+      const artistEl = item.querySelector('.byline');
+      const imgEl = item.querySelector('.thumbnail img');
+      if (!titleEl) return null;
+
+      const title = titleEl.textContent.trim();
+      const bylineText = artistEl ? artistEl.textContent.trim() : '';
+      const artist = parseBylineArtist(bylineText);
+      const queueEntry = queueIndex.get(this._normalizeTitleForQueue(title)) || null;
+      const videoId = this._extractVideoIdFromQueueItem(item)
+        || (queueEntry ? queueEntry.videoId : null);
+      const isPlaying = playing;
+
+      const uniqueKey = `${title}///${artist}`;
+
+      // YTM のキューはサムネイルを遅延読み込みしており、画面外の行の img は
+      // 1x1 の透明 GIF (data:) のまま。実測では最初はキュー全行がこの状態で、
+      // そのままだと Up Next のジャケットがほぼ全部プレースホルダになる。
+      //   1. DOM が本物を持っていればそれ(正方形のアートワーク)
+      //   2. InnerTube のキューにあるアートワーク URL
+      //   3. videoId から i.ytimg.com のサムネイル
+      let src = '';
+      if (imgEl && imgEl.src && !imgEl.src.startsWith('data:')) {
+        src = imgEl.src;
+      } else if (queueEntry && queueEntry.thumbnail) {
+        src = queueEntry.thumbnail;
+      } else if (videoId) {
+        src = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/hqdefault.jpg`;
+      }
+
+      const row = createEl('div', '', `queue-item ${isPlaying ? 'current' : ''} ${past ? 'past' : ''}`);
+
+      const imgHtml = src
+        ? `<img src="${src}" loading="lazy">`
+        : `<div class="queue-img-fallback">♪</div>`;
+
+      const indicatorHtml = isPlaying
+        ? `<div class="queue-playing-indicator"><i></i><i></i><i></i></div>`
+        : '';
+
+      row.innerHTML = `
+        <div class="queue-img">
+          ${imgHtml}
+          ${indicatorHtml}
+        </div>
+        <div class="queue-info">
+          <div class="queue-title">${this._escapeHtml(title)}</div>
+          <div class="queue-artist">${this._escapeHtml(bylineText)}</div>
+        </div>
+      `;
+
+      // サムネイルが 404 等で落ちた時だけ記号に差し替える。
+      // インラインの onerror は YTM の CSP で実行されないので、必ずここで張る。
+      const rowImg = row.querySelector('.queue-img img');
+      if (rowImg) {
+        rowImg.addEventListener('error', () => {
+          const fallback = createEl('div', '', 'queue-img-fallback', '♪');
+          rowImg.replaceWith(fallback);
+        }, { once: true });
+      }
+
+      row.onclick = (e) => {
+        e.stopPropagation();
+        const playButton = item.querySelector('.play-button') || item.querySelector('ytmusic-play-button-renderer');
+        if (playButton) {
+          playButton.click();
+        } else {
+          item.click();
+        }
+        setTimeout(() => this.syncQueue(), 500);
+      };
+
+      row.dataset.lyricsKey = uniqueKey;
+      return { el: row, dedupeKey: videoId || uniqueKey };
     }
   };

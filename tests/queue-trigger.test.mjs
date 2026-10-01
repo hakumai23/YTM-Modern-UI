@@ -30,8 +30,12 @@ test('帯が端を頼らずに当たる幅になっている', () => {
   )
 })
 
-test('帯は画面の高さいっぱいのまま', () => {
-  assert.match(triggerRule, /height:\s*100vh/)
+test('帯は上端とプレイヤーバーの高さを避け、その間はいっぱいに覆う', () => {
+  // 上から下まで覆うと、見えない帯が右上の「曲 / 動画」や、窓が狭い時の
+  // プレイヤーバー右端のボタンの上に乗って押せなかった
+  assert.match(triggerRule, /top:\s*72px/)
+  assert.match(triggerRule, /bottom:\s*calc\(48px \+ 80px \* var\(--ytm-ui-scale\)\)/)
+  assert.doesNotMatch(triggerRule, /height:\s*100vh/)
   assert.match(triggerRule, /right:\s*0/)
 })
 

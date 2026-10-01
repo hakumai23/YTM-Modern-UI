@@ -67,9 +67,35 @@ test('新UIでも Immersion のナビバー(検索欄)は画面の内側に収�
   // width: 100% を指定し、こちらより強い。左だけ 10% ずれて右端が切れていた
   const rule = css.slice(css.indexOf('body.ytm-custom-layout ytmusic-nav-bar {'))
   const body = rule.slice(0, rule.indexOf('}'))
-  assert.match(body, /left: 10% !important;/)
-  assert.match(body, /width: 80% !important;/)
-  assert.match(css, /body\.ytm-custom-layout ytmusic-nav-bar\.moviemode \{\s*width: 60% !important;\s*left: 20% !important;/)
+  assert.match(body, /--ytmi-nav-width: min\(max\(80%, 860px\), calc\(100% - 24px\)\);/)
+  assert.match(body, /left: calc\(\(100% - var\(--ytmi-nav-width\)\) \/ 2\) !important;/)
+  assert.match(body, /width: var\(--ytmi-nav-width\) !important;/)
+  // 動画モードは 60%。窓が狭くても中身が収まる幅より狭くしない
+  assert.match(css, /body\.ytm-custom-layout ytmusic-nav-bar\.moviemode \{\s*--ytmi-nav-width: min\(max\(60%, 860px\), calc\(100% - 24px\)\);/)
+})
+
+test('隠れているナビバーは押下を下へ通し、ナビバーの高さに乗せたら出す(押せるものの上では出さない)', () => {
+  const rule = css.slice(css.indexOf('body.ytm-custom-layout ytmusic-nav-bar {'))
+  assert.match(rule.slice(0, rule.indexOf('}')), /pointer-events: none !important;/)
+  const shown = css.slice(css.indexOf('body.ytm-custom-layout.ytmi-nav-peek ytmusic-nav-bar,'))
+  assert.match(shown.slice(0, shown.indexOf('}')), /ytmusic-nav-bar:hover,[\s\S]*opacity: 1 !important;\s*pointer-events: auto !important;/)
+  assert.doesNotMatch(css, /ytmusic-nav-bar::before/)
+  // カーソルの位置で出す。押せるものの上では出さない
+  const src = ui.slice(ui.indexOf('const NAV_PEEK_CLASS'), ui.indexOf("document.addEventListener('mousemove', onNavPeekMove"))
+  const run = (y, target, shownLayout = true) => {
+    const body = { classList: { set: new Set(shownLayout ? ['ytm-custom-layout'] : []), contains(c) { return this.set.has(c) }, toggle(c, on) { on ? this.set.add(c) : this.set.delete(c) } } }
+    class Element { constructor(sel) { this.sel = sel } closest(s) { return this.sel && s.split(', ').includes(this.sel) ? this : null } }
+    const move = new Function('document', 'Element', `${src}\nreturn onNavPeekMove;`)({ body }, Element)
+    move({ clientY: y, target: new Element(target) })
+    return body.classList.set.has('ytmi-nav-peek')
+  }
+  assert.equal(run(40, null), true)
+  assert.equal(run(70, null), true)
+  assert.equal(run(80, null), false)
+  assert.equal(run(40, 'button'), false)
+  assert.equal(run(40, '.lyric-line'), false)
+  assert.equal(run(40, 'ytmusic-av-toggle'), false)
+  assert.equal(run(40, null, false), false)
 })
 
 test('新バーの右の列は、シークバーに被さった所の押下を下へ通す(Immersion の外でも)', () => {
@@ -77,4 +103,17 @@ test('新バーの右の列は、シークバーに被さった所の押下を�
   // 列の箱がシークバーの下半分(右 3 分の 1 では線も)を覆っていた
   assert.match(css, /\nytmusic-miniplayer \.ytMusicMiniPlayerRightSection \{\s*pointer-events: none !important;/)
   assert.match(css, /\nytmusic-miniplayer \.ytMusicMiniPlayerRightSection > \* \{\s*pointer-events: auto;/)
+})
+
+test('窓が狭い旧バー(Immersion の外・畳んだ状態)は、再生・次へと IMMERSION・▲ を重ねずに並べる', () => {
+  const at = css.indexOf('@media (max-width: 615px) {')
+  const block = css.slice(at, css.indexOf('\n}\n', at))
+  const scope = 'body:not\\(\\.ytm-custom-layout\\) ytmusic-app-layout:not\\(\\[player-page-open\\]\\) ytmusic-player-bar:not\\(\\.top-player-bar\\)'
+  // 小さな作り用の右側(再生・次へ)と普段の右側が同じ区画に入って重なっていた。区画を足す
+  assert.match(block, new RegExp(scope + ' \\{\\s*grid-template-columns: auto minmax\\(0, 1fr\\) auto auto !important;\\s*grid-template-areas: "start middle mweb end" !important;'))
+  assert.match(block, new RegExp(scope + ' #right-controls-mweb \\{\\s*grid-area: mweb !important;'))
+  // 普段の右側は IMMERSION と ▲ だけ
+  assert.match(block, new RegExp(scope + ' \\.right-controls-buttons > :not\\(#my-mode-toggle\\) \\{\\s*display: none !important;'))
+  // IMMERSION が入でも再生・次へを隠さない(以前は隠していた)
+  assert.doesNotMatch(block, /:has\(#my-mode-toggle\.active\) #right-controls-mweb/)
 })
