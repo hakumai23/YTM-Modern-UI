@@ -2740,6 +2740,19 @@ const getCurrentPlaybackTimeSec = () => {
   return t;
 };
 
+// 歌詞の時刻(曲内)へシークする。歌詞は「曲内の時刻 + ズレ直し」で
+// 光らせている(getCurrentPlaybackTimeSec)ので、押した行がちょうど光る
+// 位置へ飛ぶには、ズレ直しのぶんを引いて video の時刻に戻す。
+// 以前は引いていなかったので、ズレ直しをした後に行を押すと、直す前の
+// タイムスタンプへ飛んでいた(+1.0s なら押した行より 1 秒先が光る)。
+const seekToLyricTime = (lyricTime) => {
+  const v = document.querySelector('video');
+  if (!v || !Number.isFinite(lyricTime)) return;
+  const local = Math.max(0, lyricTime - (Number(config.syncOffset) || 0) / 1000);
+  // 連続再生では video の時刻が曲の頭で 0 に戻らないので、曲の始まり(timeOffset)を足す
+  v.currentTime = local + timeOffset;
+};
+
 const findMeaningIndexByTime = (timeSec) => {
   const segments = getMeaningSegments();
   if (!segments.length) return -1;
@@ -8472,11 +8485,7 @@ function renderLyrics(data) {
         syncMeaningPanelToPlayback(true, line.time);
       }
       if (!hasTimestamp || !line || line.time == null) return;
-      const v = document.querySelector('video');
-      // line.time は曲内ローカル時間。video の currentTime は曲開始オフセット分
-      // ずれている（連続再生時）ため、offset を足し戻して正しい位置をシークする。
-      // （これがないと前の曲の音声位置にシークしてしまう）
-      if (v) v.currentTime = line.time + timeOffset;
+      seekToLyricTime(line.time);
     };
     fragment.appendChild(row);
   });
@@ -9642,16 +9651,23 @@ const MODE_TOGGLE_HOSTS = [
   // 新バーは右の列の一番端(⋮ メニューの右)。PR #114 で neco222 さんが
   // 「IMMERSION の位置が悪いので一番右に寄せた」と提案した並び
   ['ytmusic-miniplayer .ytMusicMiniPlayerRightSection', 'append'],
+  // 新バーは窓が狭いと、右の列の無い小さな作り(ジャケット・曲名・再生・次へ)
+  // に変わる。その時は操作の並びの右端
+  ['ytmusic-miniplayer .ytMusicSmallViewportMiniplayerControls', 'append'],
   ['ytmusic-player-bar .right-controls', 'prepend'],
   ['ytmusic-player-bar #right-controls', 'prepend'],
 ];
 const MODE_TOGGLE_FLOATING_CLASS = 'ytm-mode-toggle-floating';
 // 本来の置き場所(自前のバー、旧バーの .right-controls-buttons、
-// 新バーの右側の列)以外にいる間は、見張りが毎回選び直して、
-// 戻れる時に戻す。
-const MODE_TOGGLE_PRIMARY_HOSTS = 4;
+// 新バーの右側の列・狭い窓の操作の並び)以外にいる間は、見張りが
+// 毎回選び直して、戻れる時に戻す。
+const MODE_TOGGLE_PRIMARY_HOSTS = 5;
 let _modeToggleAway = false;
-const isShownOnScreen = (el) => !!el && el.isConnected && el.getClientRects().length > 0;
+// 場所を取っていても、YTM が visibility:hidden で隠していれば見えない
+// (窓が狭いとプレイヤーページを開いている間、旧バーは 2 つとも visibility で
+// 隠れる。場所だけで見ていたので、ボタンが隠れたバーの中に残って押せなかった)
+const isShownOnScreen = (el) => !!el && el.isConnected && el.getClientRects().length > 0
+  && getComputedStyle(el).visibility !== 'hidden';
 // 見えていても、上に何かが被さっていれば押せない(Immersion の全面の層の
 // 下に潜ったバー等)。その位置を押した時に当たるものが中にあるかで見る。
 // 置き場所を調べる時、上に浮いている IMMERSION ボタンが被さっているのは数えない。
@@ -9679,15 +9695,18 @@ const pickModeToggleHost = () => {
   let firstExisting = null;
   for (let i = 0; i < MODE_TOGGLE_HOSTS.length; i++) {
     const [selector, how] = MODE_TOGGLE_HOSTS[i];
-    const el = document.querySelector(selector);
+    // 使っているバーの中から。狭い窓の新バーのように同じ作りのバーが
+    // 2 つ在ると、ページ全体で先に見つかるのは隠れている方になる
+    const el = PlayerBar.query(selector);
     if (!el) continue;
     const primary = i < MODE_TOGGLE_PRIMARY_HOSTS;
     if (isShownOnScreen(el) && (barMayBeAutoHidden() || isHitTestable(el))) return { el, how, primary };
     if (!firstExisting) firstExisting = { el, how, primary };
   }
+  // まだ何も再生していなければ、バーが隠れているのは普通なので浮かせない。
+  // 再生中なのにバーが見えない(狭い窓のプレイヤーページ等)なら浮かせる
   const bar = PlayerBar.get();
-  const barHidden = bar ? !isShownOnScreen(bar) : !isPlayingSomething();
-  if (barHidden) return firstExisting;
+  if (!isPlayingSomething() && (!bar || !isShownOnScreen(bar))) return firstExisting;
   return { el: document.body, how: 'float', primary: false };
 };
 const isPlayingSomething = () => {
@@ -10510,6 +10529,9 @@ const watchModeToggle = () => {
     ensureModeToggle(true);
   } else if (shown && !barMayBeAutoHidden() && isShownOnScreen(btn) && !isHitTestable(btn)) {
     // 見えているのに何かの下に潜っている(Immersion の層の下のバー等)
+    ensureModeToggle(true);
+  } else if (!shown && !isShownOnScreen(btn)) {
+    // 閉じている間に、YTM が置き場所ごと隠した(窓を狭くした等)
     ensureModeToggle(true);
   }
   if (_observedBar && (!_observedBar.isConnected || _observedBar !== PlayerBar.current())) {

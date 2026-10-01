@@ -49,7 +49,7 @@ class El {
   }
   getClientRects() { return this.rect.width ? [this.getBoundingClientRect()] : [] }
   contains(o) { for (let e = o; e; e = e.parentElement) if (e === this) return true; return false }
-  matches(sel) { return sel.split(',').some(s => matchOne(this, s.trim())) }
+  matches(sel) { return sel.split(',').some(s => matchChain(this, s.trim())) }
   closest(sel) { for (let e = this; e; e = e.parentElement) if (e.matches(sel)) return e; return null }
   *walk() { for (const c of this.children) { yield c; yield* c.walk() } }
   querySelectorAll(sel) { return [...this.walk()].filter(e => e.matches(sel)) }
@@ -61,6 +61,19 @@ class El {
       get(_, k) { return el.attrs['data-' + String(k).replace(/[A-Z]/g, c => '-' + c.toLowerCase())] },
     })
   }
+}
+// 子孫の組み合わせ(「a b」)も読む。右端が自分、残りは祖先に順に当たればよい
+const matchChain = (el, s) => {
+  const parts = s.split(/\s+/)
+  if (!matchOne(el, parts.pop())) return false
+  let p = el.parentElement
+  while (parts.length) {
+    while (p && !matchOne(p, parts[parts.length - 1])) p = p.parentElement
+    if (!p) return false
+    parts.pop()
+    p = p.parentElement
+  }
+  return true
 }
 const matchOne = (el, s) => {
   const m = s.match(/^([a-z][\w-]*)?(?:#([\w-]+))?(?:\.([\w-]+))?((?:\[[^\]]+\])*)$/i)
@@ -498,4 +511,144 @@ test('動きを減らす設定では、出入りや乗せた時の動きを付�
   const rm = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce) {\n  body.ytm-custom-layout.ytmi-fallback-bar-on #ytmi-fallback-bar'))
   assert.match(rm.slice(0, 400), /animation: none;/)
   assert.match(rm.slice(0, 400), /transition: none !important;/)
+})
+
+// ── 狭い窓(縦長)で自前のバーに置き換わっていた件 ─────────────────
+// 新バーは窓を狭くすると、プレイヤーページの中にシークバーの無い 2 つ目の
+// ytmusic-miniplayer を作り、広げてもそれを display:none で残す。
+// 先に見つかった方を取っていたので、狭い窓ではシークできない方を掴み、
+// 両方が同じ位置に重なって「押せない」と判定され自前のバーが出ていた。
+// 広い窓に戻すと、描かれていない方を掴んで「形で探す」に落ちていた。
+const twinWorld = ({ topRendered }) => {
+  const w = makeWorld()
+  const page = new El('ytmusic-player-page', { id: 'player-page' })
+  const top = new El('ytmusic-miniplayer', {
+    rect: topRendered ? { left: 0, top: VH - 80, width: 570, height: 80 } : { left: 0, top: 0, width: 0, height: 0 },
+    style: { position: 'fixed', display: topRendered ? 'flex' : 'none' },
+  })
+  top.className = 'top-player-bar'
+  top.append(new El('button'), new El('button'))
+  page.append(top)
+  const main = barLike('ytmusic-miniplayer')
+  w.layout.append(page, main)
+  return { ...w, top, main }
+}
+
+test('同じ作りのバーが 2 つ在れば、シークバーを持つ方を使う(狭い窓)', () => {
+  const w = twinWorld({ topRendered: true })
+  assert.equal(w.PlayerBar.get(), w.main)
+  assert.equal(w.PlayerBar.variant(), 'wiz')
+  assert.equal(w.top.getAttribute('data-ytmi-bar'), null)
+})
+
+test('窓を広げて片方が描かれなくなっても、もう片方を「知っている作り」として使う', () => {
+  const w = twinWorld({ topRendered: false })
+  const video = new El('video')
+  video.src = 'blob:x'
+  w.layout.append(video)
+  assert.equal(w.PlayerBar.get(), w.main)
+  // 以前はここで generic(形で探す)に落ちていた
+  assert.equal(w.PlayerBar.variant(), 'wiz')
+})
+
+test('どちらもシークバーを持つ時(旧バー)は、YTM が style で隠していない方を使う', () => {
+  const w = makeWorld()
+  const page = new El('ytmusic-player-page', { id: 'player-page' })
+  const top = barLike('ytmusic-player-bar')
+  page.append(top)
+  const main = barLike('ytmusic-player-bar')
+  w.layout.append(page, main)
+  // 広い窓: プレイヤーページの中の方を YTM が display:none にする
+  // (Immersion の CSS が出し直すので、描かれているかでは区別できない)
+  top.style.display = 'none'
+  assert.equal(w.PlayerBar.get(), main)
+  // 狭い窓: 下の方を visibility:hidden にする
+  top.style.display = ''
+  main.style.visibility = 'hidden'
+  w.context.__now += 10000
+  assert.equal(w.PlayerBar.get(), top)
+})
+
+test('使っていない方のバーは Immersion の中で出さない(重なって押せなくなる)', () => {
+  assert.match(css, /:root:is\(\[data-ytmi-bar-status="classic"\], \[data-ytmi-bar-status="wiz"\], \[data-ytmi-bar-status="generic"\]\) body\.ytm-custom-layout :is\(ytmusic-player-bar, ytmusic-miniplayer\):not\(\[data-ytmi-bar\]\) \{\s*visibility: hidden !important;\s*pointer-events: none !important;/)
+})
+
+test('バーの中の部品は、使っている方のバーから探す', () => {
+  const w = twinWorld({ topRendered: true })
+  const topRight = new El('div')
+  topRight.className = 'ytMusicMiniPlayerRightSection'
+  w.top.append(topRight)
+  const mainRight = new El('div')
+  mainRight.className = 'ytMusicMiniPlayerRightSection'
+  w.main.append(mainRight)
+  assert.equal(w.PlayerBar.query('ytmusic-miniplayer .ytMusicMiniPlayerRightSection'), mainRight)
+  // IMMERSION ボタンの置き場所もこれで選ぶ
+  assert.match(ui, /const el = PlayerBar\.query\(selector\);/)
+  // 狭い窓の小さな作り(右の列が無い)では、操作の並びの右端に置く
+  assert.match(ui, /\['ytmusic-miniplayer \.ytMusicSmallViewportMiniplayerControls', 'append'\],/)
+})
+
+// ── PiP の ☆ ──────────────────────────────────────────────
+const likeButton = (pressed) => {
+  const b = new El('button', { attrs: { 'aria-pressed': String(pressed) } })
+  b.clicked = 0
+  b.click = () => { b.clicked++ }
+  return b
+}
+
+test('☆: 新バーの高評価(like-button-view-model)を読み、押せる', () => {
+  const w = makeWorld()
+  const bar = barLike('ytmusic-miniplayer')
+  const vm = new El('like-button-view-model')
+  const btn = likeButton(true)
+  vm.append(btn)
+  bar.append(vm)
+  w.layout.append(bar)
+  assert.equal(w.PlayerBar.readLiked(), true)
+  assert.equal(w.PlayerBar.toggleLike(), true)
+  assert.equal(btn.clicked, 1)
+})
+
+test('☆: 旧バーは like ボタンの aria-pressed、無ければ like-status を読む', () => {
+  const w = makeWorld()
+  const bar = barLike('ytmusic-player-bar')
+  const renderer = new El('ytmusic-like-button-renderer', { attrs: { 'like-status': 'LIKE' } })
+  bar.append(renderer)
+  w.layout.append(bar)
+  assert.equal(w.PlayerBar.readLiked(), true)
+  renderer.setAttribute('like-status', 'INDIFFERENT')
+  assert.equal(w.PlayerBar.readLiked(), false)
+  const shape = new El('yt-button-shape', { id: 'button-shape-like' })
+  const btn = likeButton(true)
+  shape.append(btn)
+  renderer.append(shape)
+  assert.equal(w.PlayerBar.readLiked(), true)
+})
+
+test('☆: 更新の止まった別の作りのバーは読まない(前の曲の状態のままになる)', () => {
+  const w = makeWorld()
+  // 古い旧バーが残っていて、そちらは「高評価済み」のまま
+  const stale = new El('ytmusic-player-bar')
+  stale.append(new El('ytmusic-like-button-renderer', { attrs: { 'like-status': 'LIKE' } }))
+  const bar = barLike('ytmusic-miniplayer')
+  const vm = new El('like-button-view-model')
+  vm.append(likeButton(false))
+  bar.append(vm)
+  w.layout.append(stale, bar)
+  assert.equal(w.PlayerBar.get(), bar)
+  assert.equal(w.PlayerBar.readLiked(), false)
+})
+
+test('☆: 使っているバーに無ければ、同じ作りのもう 1 つのバーから読む', () => {
+  const w = twinWorld({ topRendered: true })
+  const vm = new El('like-button-view-model')
+  vm.append(likeButton(true))
+  w.top.append(vm)
+  assert.equal(w.PlayerBar.readLiked(), true)
+})
+
+test('☆: PiP は player-bar.js の高評価を使い、押した後は何度か読み直す', () => {
+  assert.match(pip, /if \(PlayerBar\.toggleLike\(\)\) \{\s*\[150, 600, 1500\]\.forEach/)
+  assert.match(pip, /const isLiked = PlayerBar\.readLiked\(\) === true;/)
+  assert.doesNotMatch(pip, /ytmusic-player-bar ytmusic-like-button-renderer/)
 })

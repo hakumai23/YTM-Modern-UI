@@ -462,11 +462,10 @@ pipDoc.body.innerHTML = `
       const nextBtn = pipDoc.getElementById('pip-next-btn');
 
       likeBtn.addEventListener('click', () => {
-        const likeWrapper = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like') || document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like');
-        if (likeWrapper) {
-          const btn = likeWrapper.querySelector('button') || likeWrapper.querySelector('tp-yt-paper-icon-button') || likeWrapper;
-          btn.click();
-          setTimeout(() => PipManager.updateLikeState(pipDoc), 200);
+        // 押したら、YTM 側が切り替わるのを待って何度か読み直す
+        // (通信を挟むので、1 回だけだと切り替わる前を読んで変わらないように見える)
+        if (PlayerBar.toggleLike()) {
+          [150, 600, 1500].forEach(ms => setTimeout(() => PipManager.updateLikeState(pipDoc), ms));
         }
       });
 
@@ -513,10 +512,8 @@ pipDoc.body.innerHTML = `
         const timeStr = target.dataset.startTime;
         if (timeStr) {
           const time = parseFloat(timeStr);
-          if (!isNaN(time)) {
-            const v = document.querySelector('video');
-            if (v) v.currentTime = time + timeOffset;
-          }
+          // ズレ直しのぶんも合わせる(lyrics-ui.js の seekToLyricTime)
+          if (!isNaN(time)) seekToLyricTime(time);
         }
       });
 
@@ -589,17 +586,8 @@ pipDoc.body.innerHTML = `
       const likeBtn = doc.getElementById('pip-like-btn');
       if (!likeBtn) return;
 
-      let isLiked = false;
-      const likeButtonElement = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer #button-shape-like button') || document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer .like button');
-
-      if (likeButtonElement) {
-        isLiked = likeButtonElement.getAttribute('aria-pressed') === 'true';
-      } else {
-        const ytmLikeRenderer = document.querySelector('ytmusic-player-bar ytmusic-like-button-renderer');
-        if (ytmLikeRenderer && ytmLikeRenderer.hasAttribute('like-status')) {
-          isLiked = ytmLikeRenderer.getAttribute('like-status') === 'LIKE';
-        }
-      }
+      // 新旧どちらのバーでも、使っているバーから読む(player-bar.js)
+      const isLiked = PlayerBar.readLiked() === true;
 
       // 星のアイコンのパス定義
 

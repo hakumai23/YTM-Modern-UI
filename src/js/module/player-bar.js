@@ -109,6 +109,22 @@ const PlayerBar = (() => {
     return !!(v && (v.currentSrc || v.src));
   };
 
+  // 知っている作りのバーが幾つも在る時に、どれを使うか。
+  // 新バーは窓を狭くすると、プレイヤーページの中にもう 1 つ(シークバーの
+  // 無い上端用)を作り、広げてもそちらを display:none で残す。先に見つかった
+  // 方を取ると、狭い窓ではシークできない方を、広い窓では描かれていない方を
+  // 掴み、自前のバーや「形で探す」に落ちていた(実機)。旧バーも窓を狭くすると
+  // 2 つになり、どちらもシークバーを持つ。隠す方には YTM が style 属性で
+  // display:none / visibility:hidden を付ける(広い窓ではプレイヤーページの中の方、
+  // 狭い窓では下の方)。
+  // シークバーを持っている > YTM が隠していない > 描かれている > 先に在る、の順で選ぶ。
+  // 描かれているかは Immersion の CSS が出し直すので当てにならない。style 属性は
+  // こちらからは --ytmi-bar-display しか触らないので、YTM の意図がそのまま読める。
+  const hiddenByYtm = (el) => !!el.style && (el.style.display === 'none' || el.style.visibility === 'hidden');
+  const rankKnown = (el) => (el.querySelector(SLIDER_SELECTOR) ? 4 : 0)
+    + (hiddenByYtm(el) ? 0 : 2)
+    + (isRendered(el) ? 1 : 0);
+
   // 今のバー。見つからなければ null。
   // 呼ばれる回数が多い(tick ごと)ので、少しの間は前の答えを使う。
   const CACHE_MS = 500;
@@ -117,27 +133,30 @@ const PlayerBar = (() => {
     const now = performance.now();
     if (adopted && adopted.isConnected && now - lastResolved < CACHE_MS) return adopted;
     lastResolved = now;
-    // 知っている作りのうち、実際に描かれている方。作り直しの途中で
+    // 知っている作りのうち一番使えそうなもの(rankKnown)。作り直しの途中で
     // 古いバーが空のまま残る作りもありうるので、在るだけでは決めない。
-    let firstKnown = null;
-    let firstKnownVariant = 'none';
+    let best = null;
+    let bestVariant = 'none';
+    let bestRank = -1;
     for (const [selector, v] of KNOWN) {
-      const el = document.querySelector(selector);
-      if (!el) continue;
-      if (!firstKnown) {
-        firstKnown = el;
-        firstKnownVariant = v;
+      for (const el of document.querySelectorAll(selector)) {
+        const rank = rankKnown(el);
+        if (rank > bestRank) {
+          best = el;
+          bestVariant = v;
+          bestRank = rank;
+        }
       }
-      if (isRendered(el)) {
-        adopt(el, v);
-        return el;
-      }
+    }
+    if (best && isRendered(best)) {
+      adopt(best, bestVariant);
+      return best;
     }
     // 形で拾ったバーは、YTM が一時的に隠していても(プレイヤーページを
     // 開いている間だけ消す作りなど)手放さない。CSS が出し直す。
     if (adopted && adopted.isConnected && adoptedVariant === 'generic') return adopted;
     // 知っている作りが見当たらない、または在るのに再生中なのに描かれていない
-    if (!firstKnown || isPlayingSomething()) {
+    if (!best || isPlayingSomething()) {
       if (now - lastGenericScan >= GENERIC_SCAN_INTERVAL_MS) {
         lastGenericScan = now;
         const el = findGeneric();
@@ -148,15 +167,60 @@ const PlayerBar = (() => {
       }
     }
     // まだ何も再生していない間は、知っている作りのバーが隠れているのが普通
-    if (firstKnown) {
-      adopt(firstKnown, firstKnownVariant);
-      return firstKnown;
+    if (best) {
+      adopt(best, bestVariant);
+      return best;
     }
     release();
     return null;
   };
 
   const variant = () => (adopted && adopted.isConnected ? adoptedVariant : 'none');
+
+  // ── 高評価 ──
+  // PiP の ☆ が使う。以前は ytmusic-player-bar の中だけを見ていたので、
+  // 新バーでは何も見つからず押しても効かず、旧バーが残っている作りでは
+  // 更新の止まった方を読んで前の曲の状態のままになっていた。
+  // 使っているバーの中から探す。狭い窓の新バーのように同じ作りのバーが
+  // もう 1 つ在れば、そちらも見る(同じ曲の状態を映している)。
+  //  ・旧バー: ytmusic-like-button-renderer(like-status 属性も持つ)
+  //  ・新バー: 右の列の yt-video-action-bar-view-model の like-button-view-model
+  //    (ログインしていないと出ない)
+  const LIKE_BUTTON_SELECTOR = [
+    'ytmusic-like-button-renderer #button-shape-like button',
+    'ytmusic-like-button-renderer .like button',
+    'like-button-view-model button',
+  ].join(', ');
+  const likeScopes = () => {
+    const bar = get();
+    if (!bar) return [document];
+    const known = KNOWN.find(([, v]) => v === adoptedVariant);
+    const twins = known ? [...document.querySelectorAll(known[0])].filter(el => el !== bar) : [];
+    return [bar, ...twins];
+  };
+  const findLikeButton = () => {
+    for (const scope of likeScopes()) {
+      const btn = scope.querySelector(LIKE_BUTTON_SELECTOR);
+      if (btn) return btn;
+    }
+    return null;
+  };
+  // true / false / null(分からない: ボタンが無い)
+  const readLiked = () => {
+    for (const scope of likeScopes()) {
+      const btn = scope.querySelector(LIKE_BUTTON_SELECTOR);
+      if (btn && btn.hasAttribute('aria-pressed')) return btn.getAttribute('aria-pressed') === 'true';
+      const renderer = scope.querySelector('[like-status]');
+      if (renderer) return renderer.getAttribute('like-status') === 'LIKE';
+    }
+    return null;
+  };
+  const toggleLike = () => {
+    const btn = findLikeButton();
+    if (!btn) return false;
+    btn.click();
+    return true;
+  };
 
   // YTM が「プレイヤーページを開いている間はバーを display:none にする」
   // ような作りに変えても出せるよう、見えていた時の display を控えておく。
@@ -817,6 +881,14 @@ const PlayerBar = (() => {
     configure,
     controls,
     isFallbackOn: () => fallbackOn,
+    // バーの中の部品を、使っているバーの中から探す(無ければページ全体から)。
+    // 同じ作りのバーが 2 つ在る時に、隠れている方を掴まないため
+    query: (selector) => {
+      const bar = get();
+      return (bar && bar.querySelector(selector)) || document.querySelector(selector);
+    },
+    readLiked,
+    toggleLike,
     // ▼ を出せるかは、プレイヤーページの開閉や履歴で変わる(見張りから呼ぶ)
     syncMinimize: () => paintMinimize(),
     // 表示言語が変わった時に描き直す

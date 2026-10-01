@@ -15,12 +15,13 @@ const css = read('src/css/style.css')
 
 // 置き場所を選ぶ部分だけを、偽の document の上で動かす
 const pickSrc = ui.slice(ui.indexOf('const MODE_TOGGLE_HOSTS = ['), ui.indexOf('const placeModeToggle ='))
-const el = (name, shown = true) => ({ name, isConnected: true, getClientRects: () => (shown ? [{}] : []) })
+const el = (name, shown = true, visibility = 'visible') => ({ name, visibility, isConnected: true, getClientRects: () => (shown ? [{}] : []) })
 const pickWith = (nodes) => {
   const document = { querySelector: (s) => nodes[s] || null, body: el('body') }
   // バーは PlayerBar(player-bar.js)が探す。ここでは知っている作りの旧バーだけ
-  const PlayerBar = { get: () => nodes['ytmusic-player-bar'] || null }
-  const pick = new Function('document', 'window', 'PlayerBar', 'moviemode', `${pickSrc}\nreturn pickModeToggleHost;`)(document, {}, PlayerBar, false)
+  const PlayerBar = { get: () => nodes['ytmusic-player-bar'] || null, query: (s) => document.querySelector(s) }
+  const getComputedStyle = (e) => ({ visibility: e.visibility || 'visible' })
+  const pick = new Function('document', 'window', 'PlayerBar', 'moviemode', 'getComputedStyle', `${pickSrc}\nreturn pickModeToggleHost;`)(document, {}, PlayerBar, false, getComputedStyle)
   const host = pick()
   return host && { name: host.el.name, how: host.how, ...(host.primary && host.el.name === 'right' ? { primary: true } : {}) }
 }
@@ -70,6 +71,24 @@ test('バーごと隠れている間(まだ何も再生していない)は浮か
     'ytmusic-player-bar': el('bar', false),
   }), { name: 'rcb', how: 'prepend' })
   assert.equal(pickWith({ 'ytmusic-player-bar': el('bar', false) }), null)
+})
+
+test('再生中に YTM がバーを visibility で隠したら(狭い窓のプレイヤーページ)浮かせる', () => {
+  // 場所は取ったまま visibility:hidden。場所だけで見ていた頃は、隠れたバーの中に
+  // ボタンが残って押せなかった
+  assert.equal(pickWith({
+    '.right-controls-buttons': el('rcb', true, 'hidden'),
+    'ytmusic-player-bar': el('bar', true, 'hidden'),
+    video: { currentSrc: 'blob:x' },
+  }).how, 'float')
+  // まだ何も再生していなければ浮かせない(今までどおり)
+  assert.deepEqual(pickWith({
+    '.right-controls-buttons': el('rcb', true, 'hidden'),
+    'ytmusic-player-bar': el('bar', true, 'hidden'),
+  }), { name: 'rcb', how: 'prepend' })
+  // 閉じている間も見張りが選び直す
+  const watch = ui.slice(ui.indexOf('const watchModeToggle = () => {'), ui.indexOf('const BAR_RESOLVE_EVERY'))
+  assert.match(watch, /\} else if \(!shown && !isShownOnScreen\(btn\)\) \{\s*\/\/[^\n]*\n\s*ensureModeToggle\(true\);/)
 })
 
 test('プレイヤーバー自体が見つからなくても、再生中なら浮かせて出す', () => {

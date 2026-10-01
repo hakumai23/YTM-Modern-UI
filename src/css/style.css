@@ -2220,6 +2220,15 @@ body.ytm-custom-layout [data-ytmi-bar] {
   pointer-events: auto !important;
 }
 
+/* 同じ作りのバーが 2 つ在る時(新バーは窓を狭くすると、プレイヤーページの中に
+   もう 1 つ作る)、使っていない方は出さない。下の指定は要素名で当たるので、
+   両方が同じ位置に浮いて重なり、上に来た方が押せない側になって
+   自前のバーに置き換わっていた(縦長の窓で実機)。どれを使うかは player-bar.js */
+:root:is([data-ytmi-bar-status="classic"], [data-ytmi-bar-status="wiz"], [data-ytmi-bar-status="generic"]) body.ytm-custom-layout :is(ytmusic-player-bar, ytmusic-miniplayer):not([data-ytmi-bar]) {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 /* YTM が「プレイヤーページを開いている間はバーを display:none にする」
    作りに変えても出せるよう、見えていた時の display(player-bar.js が
    --ytmi-bar-display に控える)で出す。旧バーは下の指定で flex に決めている。 */
@@ -2671,6 +2680,33 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {
   right: calc(40px * var(--ytm-ui-scale)) !important;
   width: auto !important;
   top: 2px !important;
+  /* 当たり判定はシークバー本体(下)へ移す */
+  padding: 0 !important;
+}
+
+/* シークバーの当たり判定を、時刻の吹き出しが出る範囲と揃える。
+   YTM は吹き出しを外枠(上下 10px の余白込みで 23px)の上で出すが、押して
+   シークできるのは中の 3px の線だけなので、吹き出しが出たのに押しても
+   飛ばない所が線の上下に 10px ずつあった(新バーで報告)。外枠の余白を
+   シークバー自身の余白に移し、線の太さは背景を中身の範囲に切って保つ。
+   つまみ(::-webkit-slider-thumb)は中身の範囲に対して置かれるので位置は変わらない。 */
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBar {
+  box-sizing: border-box !important;
+  height: 23px !important;
+  padding: 10px 0 !important;
+  /* 進み具合は YTM が style 属性の background(一括指定)で塗るので、!important で切る */
+  background-clip: content-box !important;
+  transition: padding 0.15s ease-out !important;
+}
+
+/* 乗せた時に線が 3px → 5px に太るのは YTM と同じ(高さではなく余白で) */
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBar:is(:hover, :active, :focus-visible) {
+  height: 23px !important;
+  padding: 9px 0 !important;
+}
+
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBar:focus-visible {
+  outline-offset: -7px !important;
 }
 
 body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerRightSection {
