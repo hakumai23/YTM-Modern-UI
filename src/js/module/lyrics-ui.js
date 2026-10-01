@@ -9903,6 +9903,7 @@ const ensureModeToggle = (recheck) => {
   if (btn && btn.isConnected && !recheck) {
     const isActive = btn.classList.contains('active');
     if (config.mode !== isActive) btn.classList.toggle('active', config.mode);
+    syncBarMinimize(btn);
     return btn;
   }
   const host = pickModeToggleHost();
@@ -9920,7 +9921,39 @@ const ensureModeToggle = (recheck) => {
   const settled = btn.isConnected && !btn.classList.contains(MODE_TOGGLE_FLOATING_CLASS)
     && isShownOnScreen(parent);
   if (!settled || (host.how !== 'float' && host.el !== parent)) placeModeToggle(btn, host);
+  syncBarMinimize(btn);
   return btn;
+};
+
+// YTM のバーに並べる ▼(プレイヤーを閉じる)。旧バーには YTM の
+// 「プレーヤー ページを閉じる」がバーの中に在るが、新バー(ytmusic-miniplayer)
+// には無い。新バーで畳むボタン(ミニプレーヤーを開く)はプレイヤーの上端に
+// 在り、Immersion の下に隠れるので、Immersion を開くと閉じる手段が
+// 見えなくなっていた。YTM の閉じるボタンが無いバーでは IMMERSION の右に出す。
+// 自前のバーは自分の ▼ を持ち、浮いている IMMERSION には並べない。
+const BAR_MINIMIZE_ID = 'ytmi-bar-minimize';
+const BAR_MINIMIZE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 10 5 5 5-5"/></svg>';
+const syncBarMinimize = (toggle) => {
+  let el = document.getElementById(BAR_MINIMIZE_ID);
+  const bar = toggle.isConnected && !toggle.classList.contains(MODE_TOGGLE_FLOATING_CLASS)
+    && !toggle.closest('#ytmi-fallback-bar') ? PlayerBar.get() : null;
+  const want = !!bar && bar.contains(toggle) && canMinimizeImmersion()
+    && !bar.querySelector('.toggle-player-page-button');
+  if (!want) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = createEl('button', BAR_MINIMIZE_ID, '', BAR_MINIMIZE_ICON);
+    el.type = 'button';
+    el.onclick = minimizeImmersion;
+  }
+  const text = t('fb_minimize');
+  if (el.title !== text) {
+    el.title = text;
+    el.setAttribute('aria-label', text);
+  }
+  if (toggle.nextElementSibling !== el) toggle.after(el);
 };
 
 const tick = async () => {

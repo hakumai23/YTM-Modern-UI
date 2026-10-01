@@ -2714,6 +2714,59 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerRightSection {
   padding-right: 0 !important;
 }
 
+/* 窓が狭い時の小さな作り(ジャケット・曲名・再生・次へ)。YTM はこれを
+   3 列のグリッドの 1 列目(幅は 3 分の 1 ほど)に overflow:hidden で置くので、
+   右端に足した IMMERSION と ▼ が切れていた。Immersion では全列に広げ、
+   広い作りと同じく曲名とジャケットは出さずに操作を中央に寄せる */
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicSmallViewportMiniplayerHost {
+  grid-column: 1 / -1 !important;
+  justify-content: center !important;
+}
+
+body.ytm-custom-layout ytmusic-miniplayer .ytMusicSmallViewportMiniplayerLeftSection {
+  display: none !important;
+}
+
+/* ▼(プレイヤーを閉じる)。新バーには YTM の閉じるボタンが無いので、
+   IMMERSION の右に足す(lyrics-ui.js の syncBarMinimize)。見た目は隣の
+   字幕・音量・⋮ の丸いボタンに揃える */
+#ytmi-bar-minimize {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+/* 閉じた後、見張りが外すまで(広告中は tick が止まる)残らないように */
+body:not(.ytm-custom-layout) #ytmi-bar-minimize {
+  display: none;
+}
+
+#ytmi-bar-minimize:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+#ytmi-bar-minimize:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+#ytmi-bar-minimize svg {
+  width: 20px;
+  height: 20px;
+  pointer-events: none;
+}
+
 /* YTM は幅 1200px 以下で時刻を隠す。旧バーの Immersion では出ていたので出す */
 body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerTimeInfo {
   display: block !important;
