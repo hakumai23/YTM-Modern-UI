@@ -61,3 +61,20 @@ test('Immersion 中は新しいバーも浮いた角丸のバーにし、Immersi
   assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicMiniPlayerTrackInfo \{\s*display: none !important;/)
   assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicMiniPlayerTimeInfo \{\s*display: block !important;/)
 })
+
+test('新UIでも Immersion のナビバー(検索欄)は画面の内側に収める', () => {
+  // 新UIの YTM は ytmusic-app-layout[is-wiz-miniplayer-enabled] > [slot="nav-bar"] で
+  // width: 100% を指定し、こちらより強い。左だけ 10% ずれて右端が切れていた
+  const rule = css.slice(css.indexOf('body.ytm-custom-layout ytmusic-nav-bar {'))
+  const body = rule.slice(0, rule.indexOf('}'))
+  assert.match(body, /left: 10% !important;/)
+  assert.match(body, /width: 80% !important;/)
+  assert.match(css, /body\.ytm-custom-layout ytmusic-nav-bar\.moviemode \{\s*width: 60% !important;\s*left: 20% !important;/)
+})
+
+test('新バーの右の列は、シークバーに被さった所の押下を下へ通す(Immersion の外でも)', () => {
+  // YTM は音量の縦スライダーのために右の列を z-index: 2 で重ねていて、
+  // 列の箱がシークバーの下半分(右 3 分の 1 では線も)を覆っていた
+  assert.match(css, /\nytmusic-miniplayer \.ytMusicMiniPlayerRightSection \{\s*pointer-events: none !important;/)
+  assert.match(css, /\nytmusic-miniplayer \.ytMusicMiniPlayerRightSection > \* \{\s*pointer-events: auto;/)
+})

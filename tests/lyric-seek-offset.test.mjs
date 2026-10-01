@@ -65,14 +65,16 @@ test('Immersion の歌詞も PiP の歌詞も、同じシークを使う', () =>
   assert.doesNotMatch(pip, /currentTime = time \+ timeOffset/)
 })
 
-test('新バーのシークバーは、吹き出しが出る範囲ぜんぶで押せる', () => {
-  const wrap = slice(css, 'body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {', 'body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerRightSection {')
+test('新バーのシークバーは、吹き出しが出る範囲ぜんぶで押せる(Immersion の外でも)', () => {
+  const wrap = slice(css, 'ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {\n  padding: 0', 'body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerRightSection {')
   // 外枠の余白は 0 にして、
-  assert.match(wrap, /\.ytMusicMiniPlayerProgressBarWrapper \{[^}]*padding: 0 !important;/)
+  assert.match(wrap, /^ytmusic-miniplayer \.ytMusicMiniPlayerProgressBarWrapper \{\s*padding: 0 !important;/)
   // シークバー自身が同じ 23px(上下 10px + 線 3px)を受け持つ。線は背景を中身に切って細いまま
-  const bar = wrap.slice(wrap.indexOf('body.ytm-custom-layout ytmusic-miniplayer .ytMusicMiniPlayerProgressBar {'))
+  const bar = wrap.slice(wrap.indexOf('\nytmusic-miniplayer .ytMusicMiniPlayerProgressBar {'))
   assert.match(bar, /height: 23px !important;\s*padding: 10px 0 !important;/)
   assert.match(bar, /background-clip: content-box !important;/)
   // 乗せた時は線が 5px(YTM と同じ)。全体の高さは変えない
   assert.match(bar, /:is\(:hover, :active, :focus-visible\) \{\s*height: 23px !important;\s*padding: 9px 0 !important;/)
+  // Immersion を閉じている間も効かせる(body.ytm-custom-layout に限らない)
+  assert.doesNotMatch(css, /body\.ytm-custom-layout ytmusic-miniplayer \.ytMusicMiniPlayerProgressBar[ :{]/)
 })
