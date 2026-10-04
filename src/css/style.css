@@ -2769,8 +2769,9 @@ body.ytm-custom-layout ytmusic-miniplayer .ytMusicSmallViewportMiniplayerLeftSec
   transition: background-color 0.15s ease;
 }
 
-/* ▼ は、閉じた後に見張りが外すまで(広告中は tick が止まる)残らないように */
-body:not(.ytm-custom-layout) #ytmi-bar-minimize[data-act="close"] {
+/* ▼ は、閉じた後に見張りが外すまで(広告中は tick が止まる)残らないように。
+   Immersion を切ってプレイヤーページを開いている間は出す */
+body:not(.ytm-custom-layout) ytmusic-app-layout:not([player-page-open]) #ytmi-bar-minimize[data-act="close"] {
   display: none;
 }
 
@@ -2809,6 +2810,27 @@ ytmusic-miniplayer:has(> .ytMusicMiniPlayerRightSection) {
 /* Immersion では左の列(曲名)を出さないので、列の間を詰めて場所を作る */
 body.ytm-custom-layout ytmusic-miniplayer {
   column-gap: 24px !important;
+}
+
+/* 右の列が左右どちらの列にも収まるよう、要る分だけバーを広げる(lyrics-ui.js の
+   balanceWizBar が中身を測って --ytmi-bar-need に入れる)。広げきれない時は
+   時刻を隠す(data-ytmi-hide-time)。どちらも再生ボタンを真ん中に保つため */
+body.ytm-custom-layout ytmusic-miniplayer[style*="--ytmi-bar-need"] {
+  max-width: min(max(calc(1000px * var(--ytm-ui-scale)), var(--ytmi-bar-need)), 95vw) !important;
+}
+
+body.ytm-custom-layout ytmusic-miniplayer.moviemode[style*="--ytmi-bar-need"] {
+  max-width: min(max(calc(1200px * var(--ytm-ui-scale)), var(--ytmi-bar-need)), 98vw) !important;
+}
+
+body.ytm-custom-layout ytmusic-miniplayer[data-ytmi-hide-time] .ytMusicMiniPlayerTimeInfo {
+  display: none !important;
+}
+
+/* 時刻を隠してもまだ足りない狭い窓。値は lyrics-ui.js の WIZ_TIGHT_* と同じ */
+body.ytm-custom-layout ytmusic-miniplayer[data-ytmi-bar-tight] {
+  column-gap: 8px !important;
+  padding: 0 16px !important;
 }
 
 /* それでも収まらない幅では、YTM と同じく時刻を隠す。バーは 95vw、

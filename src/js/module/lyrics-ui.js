@@ -1567,25 +1567,37 @@ function isYTMPremiumUser() {
   return canSwitch;
 }
 
+// ページを読み込んだ直後は、トグルが在っても playback-mode がしばらく
+// "NONE" で、0.1〜0.5 秒ほどしてから OMV_PREFERRED / ATV_PREFERRED に決まる
+// (実機)。以前は "NONE" を見た時点で諦めていたので、リンクから開いたり
+// 読み込み直したりすると動画のまま残った。広告が挟まると tick が待つ間に
+// 決まるので、広告の出ない(Premium の)人ほど起きていた。決まるまで待つ。
+const PREFER_SONG_MAX_ATTEMPTS = 20;
 function preferLyricsDefault(targetKey, attempt = 0) {
   if (!targetKey || currentKey !== targetKey) return;
   // 設定で切れるようにした。以前は曲が変わるたびに必ず「曲」へ寄せていたので、
   // 「動画」を選んでいても毎曲戻され、動画モードに留まる手段が無かった。
   if (!config.preferSongMode) return;
 
+  const retry = () => {
+    if (attempt < PREFER_SONG_MAX_ATTEMPTS) setTimeout(() => preferLyricsDefault(targetKey, attempt + 1), 300);
+  };
   const switcher = document.querySelector("ytmusic-av-toggle");
   if (!switcher) {
-    if (attempt < 10) setTimeout(() => preferLyricsDefault(targetKey, attempt + 1), 300);
+    retry();
     return;
   }
 
   const mode = switcher.getAttribute("playback-mode");
   if (mode === "ATV_PREFERRED") return;
-  if (mode && mode !== "OMV_PREFERRED") return;
+  if (mode !== "OMV_PREFERRED") {
+    retry();
+    return;
+  }
 
   const songBtn = switcher.querySelector('.song-button.ytmusic-av-toggle, .song-button');
   if (!songBtn) {
-    if (attempt < 10) setTimeout(() => preferLyricsDefault(targetKey, attempt + 1), 300);
+    retry();
     return;
   }
 
@@ -1596,7 +1608,7 @@ function preferLyricsDefault(targetKey, attempt = 0) {
     console.warn('Failed to switch default playback mode to lyrics', e);
   }
 
-  if (attempt < 10) {
+  if (attempt < PREFER_SONG_MAX_ATTEMPTS) {
     setTimeout(() => {
       if (currentKey !== targetKey) return;
       const latestMode = switcher.getAttribute("playback-mode");
@@ -9087,6 +9099,7 @@ window.addEventListener('resize', () => {
     recenterLyricsAfterResize();
     // YTM が窓の幅でバーの並べ方(grid / flex)を変えるので、控えを取り直す
     PlayerBar.rememberDisplay(PlayerBar.current(), true);
+    balanceWizBar();
   }, 200);
 });
 
@@ -9808,6 +9821,7 @@ const shouldShowImmersion = () => {
 const applyImmersionShown = (shown) => {
   document.body.classList.toggle('ytm-custom-layout', shown);
   PlayerBar.check({ shown, skip: true });
+  syncBarPlayerButton();
 };
 
 const setImmersionOpen = (open) => {
@@ -9889,9 +9903,13 @@ const canGoBackInApp = () => {
 };
 const canMinimizeImmersion = () => document.body.classList.contains('ytm-custom-layout');
 const MINIMIZE_CONFIRM_MS = 700;
+// Immersion を切ってプレイヤーページを開いている時も、バーの ▼ から畳む
+// (新バーには YTM の畳むボタンがバーに無い。下の syncBarMinimize)
 const minimizeImmersion = () => {
-  if (!canMinimizeImmersion()) return;
-  if (!readPlayerPageOpen()) {
+  const shown = canMinimizeImmersion();
+  const open = readPlayerPageOpen();
+  if (!shown && !open) return;
+  if (!open) {
     _immersionManualOpen = false;
     applyImmersionShown(shouldShowImmersion());
     requestImmersionTick();
@@ -9900,7 +9918,7 @@ const minimizeImmersion = () => {
   const fallback = () => {
     if (!readPlayerPageOpen()) return;
     if (canGoBackInApp()) history.back();
-    else setImmersionOpen(false);
+    else if (canMinimizeImmersion()) setImmersionOpen(false);
   };
   const btn = findYtmCollapseButton();
   if (!btn) {
@@ -9933,6 +9951,7 @@ const runImmersionBarCheck = () => {
   const changed = PlayerBar.check({ shown, skip: !!moviemode });
   if (changed) ensureModeToggle(true);
   if (PlayerBar.isFallbackOn()) PlayerBar.syncMinimize();
+  balanceWizBar();
 };
 
 // 置き場所が CSS で隠された(要素は残っている)ことは、見張りでは測らず
@@ -10017,15 +10036,21 @@ const barPlayerAction = (toggle) => {
     || toggle.closest('#ytmi-fallback-bar')) return null;
   const bar = PlayerBar.get();
   if (!bar || !bar.contains(toggle) || bar.querySelector('.toggle-player-page-button')) return null;
-  if (canMinimizeImmersion()) return 'close';
-  if (!readPlayerPageOpen() && isPlayingSomething()) return 'open';
+  // Immersion を切ってプレイヤーページを開いている時も ▼ を出す。新バーの
+  // YTM の畳むボタンは動画の上に乗せた時だけ出るので、曲を大きく出して
+  // いる間に閉じる手段が見当たらない、と報告があった
+  if (canMinimizeImmersion() || readPlayerPageOpen()) return 'close';
+  if (isPlayingSomething()) return 'open';
   return null;
 };
 const syncBarMinimize = (toggle) => {
   let el = document.getElementById(BAR_MINIMIZE_ID);
   const act = barPlayerAction(toggle);
   if (!act) {
-    if (el) el.remove();
+    if (el) {
+      el.remove();
+      balanceWizBar();
+    }
     return;
   }
   if (!el) {
@@ -10045,7 +10070,101 @@ const syncBarMinimize = (toggle) => {
     el.title = text;
     el.setAttribute('aria-label', text);
   }
-  if (toggle.nextElementSibling !== el) toggle.after(el);
+  if (toggle.nextElementSibling !== el) {
+    toggle.after(el);
+    balanceWizBar();
+  }
+};
+// ▼▲ を今の状態にすぐ合わせる。Immersion の出し入れとプレイヤーページの
+// 開閉の時に呼ぶ。tick の中では ▼▲ を合わせた後に Immersion の出し入れが
+// 変わるので、それだけでは開閉の直後に前の状態のまま残り、次のきっかけ
+// (見張りなら最大 1.5 秒後)まで ▼ が出ない・閉じた後も ▼ が残っていた
+function syncBarPlayerButton() {
+  const toggle = document.getElementById('my-mode-toggle');
+  if (toggle) syncBarMinimize(toggle);
+}
+
+// ── 新バーの再生ボタンを真ん中に保つ ──
+// 新バーは「左 1fr・中 auto・右 1fr」の 3 列で、右の列は中身より狭くしない
+// (style.css)。Immersion では右の列に時刻・字幕・音量・⋮ と IMMERSION・▼ が
+// 並び、幅 1000px のバーの 1 列分(約 290px)に収まらない。溢れた分だけ右の
+// 列が広がり、再生ボタンが左へずれていた(1440px 幅で 14px、900px 幅で 86px)。
+// 中身は曲で変わる(字幕ボタンの有無・時刻の桁)ので、測って決める:
+//  1. 右の列が左右どちらの列にも収まる幅まで、バーを広げる(画面の 95% まで)
+//  2. それでも足りなければ時刻を隠す(YTM も狭い窓では隠している)
+//  3. まだ足りなければ、バーの左右の余白と列の間を詰める(style.css の
+//     data-ytmi-bar-tight。詰めた分は WIZ_TIGHT_* と同じ値)
+//  窓がもっと狭いと、それでも少しずれる(以前の半分ほど)
+// 左の列は Immersion では何も出さないので、どちらの列も 1fr のまま同じ幅になる
+const WIZ_TIGHT_GAP = 8;
+const WIZ_TIGHT_PADDING = 16;
+let _wizTimeWidth = 92;
+// 詰める前の余白と列の間(詰めている間は測れないので、最後に測った値)
+let _wizLooseSpacing = null;
+const balanceWizBar = () => {
+  const bar = PlayerBar.current();
+  if (!bar) return;
+  const clear = () => {
+    if (bar.style.getPropertyValue('--ytmi-bar-need')) bar.style.removeProperty('--ytmi-bar-need');
+    if (bar.hasAttribute('data-ytmi-hide-time')) bar.removeAttribute('data-ytmi-hide-time');
+    if (bar.hasAttribute('data-ytmi-bar-tight')) bar.removeAttribute('data-ytmi-bar-tight');
+  };
+  const shown = document.body.classList.contains('ytm-custom-layout');
+  const right = shown && PlayerBar.variant() === 'wiz' && bar.querySelector(':scope > .ytMusicMiniPlayerRightSection');
+  const mid = right && bar.querySelector(':scope > .ytMusicMiniPlayerMiddleSection');
+  if (!mid || !mid.getClientRects().length || !right.getClientRects().length) {
+    clear();
+    return;
+  }
+  const outer = (el) => {
+    const cs = getComputedStyle(el);
+    return el.getBoundingClientRect().width + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0);
+  };
+  const time = right.querySelector(':scope > .ytMusicMiniPlayerTimeInfo');
+  // こちらが隠した時刻は、最後に見えていた時の幅で数える。狭い窓の
+  // 決まり(style.css の @media)で隠れている時刻は、無いものとして数える
+  const hiddenByUs = bar.hasAttribute('data-ytmi-hide-time');
+  const rowGap = parseFloat(getComputedStyle(right).columnGap) || 0;
+  let rest = 0;
+  let count = 0;
+  let timeAvailable = false;
+  for (const el of right.children) {
+    if (el === time) {
+      if (el.getClientRects().length) {
+        _wizTimeWidth = outer(el);
+        timeAvailable = true;
+      } else if (hiddenByUs) {
+        timeAvailable = true;
+      }
+      continue;
+    }
+    if (!el.getClientRects().length) continue;
+    rest += outer(el);
+    count++;
+  }
+  rest += rowGap * Math.max(0, count - 1);
+  const withTime = rest + (count ? rowGap : 0) + _wizTimeWidth;
+  const bcs = getComputedStyle(bar);
+  const tightNow = bar.hasAttribute('data-ytmi-bar-tight');
+  if (!tightNow || !_wizLooseSpacing) {
+    _wizLooseSpacing = {
+      padding: (parseFloat(bcs.paddingLeft) || 0) + (parseFloat(bcs.paddingRight) || 0),
+      gap: parseFloat(bcs.columnGap) || 0,
+    };
+  }
+  const border = (parseFloat(bcs.borderLeftWidth) || 0) + (parseFloat(bcs.borderRightWidth) || 0);
+  const core = border + mid.getBoundingClientRect().width;
+  const loose = core + _wizLooseSpacing.padding + _wizLooseSpacing.gap * 2;
+  const tight = core + Math.min(_wizLooseSpacing.padding, WIZ_TIGHT_PADDING * 2)
+    + Math.min(_wizLooseSpacing.gap, WIZ_TIGHT_GAP) * 2;
+  const cap = window.innerWidth * (bar.classList.contains('moviemode') ? 0.98 : 0.95);
+  const hideTime = timeAvailable && loose + withTime * 2 > cap;
+  const side = timeAvailable && !hideTime ? withTime : rest;
+  const useTight = loose + side * 2 > cap;
+  const need = `${Math.ceil((useTight ? tight : loose) + side * 2) + 2}px`;
+  if (bar.style.getPropertyValue('--ytmi-bar-need') !== need) bar.style.setProperty('--ytmi-bar-need', need);
+  if (hideTime !== hiddenByUs) bar.toggleAttribute('data-ytmi-hide-time', hideTime);
+  if (useTight !== tightNow) bar.toggleAttribute('data-ytmi-bar-tight', useTight);
 };
 
 const tick = async () => {
@@ -10332,6 +10451,37 @@ function setTitleText(el, title) {
   }
 }
 
+// アーティスト名の出どころ。旧バーは「アーティスト • アルバム • 年」の
+// yt-formatted-string、新バーは ytmusic-track-info の ytmusicTrackInfoByline。
+// 新バーの窓が狭い時は同じバーが 2 つになるので、使っている方から探す
+const ARTIST_BYLINE_SELECTOR = 'yt-formatted-string.byline.complex-string, .ytmusicTrackInfoByline';
+// 新バーのリンクは href を持たない <a role="button"> で、押すと YTM が中で
+// 移動する(実機)。旧バーのように href(channel/…)で拾うと何も拾えず、
+// Immersion のアーティスト名がただの文字になって押しても飛ばなかった。
+// アルバム名も同じ形のリンクなので、最初の「•」より前のリンクだけを
+// アーティストとして取る(例: 「A、B、C • アルバム • 2013年」)
+const readWizArtistLinks = (byline) => {
+  if (!byline || !byline.classList.contains('ytmusicTrackInfoByline')) return [];
+  const host = byline.querySelector('.ytAttributedStringHost') || byline;
+  const links = [];
+  for (const node of host.childNodes) {
+    if (node.nodeType === Node.ELEMENT_NODE && node.matches('a.ytAttributedStringLink')) {
+      links.push(node);
+    } else if ((node.textContent || '').includes('•')) {
+      break;
+    }
+  }
+  return links;
+};
+// 押された時に、今のバーの同じリンクを押す。曲が変わるとバーの中身は
+// 作り直されるので、控えた要素ではなく名前(無ければ順番)で探し直す。
+// YTM のバーで押した時と同じく、プレイヤーを畳んでアーティストのページへ移る
+const openWizArtist = (name, index) => {
+  const links = readWizArtistLinks(PlayerBar.query(ARTIST_BYLINE_SELECTOR));
+  const link = links.find(a => a.textContent.trim() === name) || links[index];
+  if (link) link.click();
+};
+
 function updateMetaUI(meta) {
   setTitleText(ui.title, meta.title);
   ui.artist.innerText = meta.artist;
@@ -10409,7 +10559,7 @@ function updateMetaUI(meta) {
     // 待っている間に次の曲へ進んでいたら、その曲の分は向こうに任せる。
     // 続けると、新しい曲のアーティスト名を前の曲の題名の下に書いてしまう。
     if (currentKey !== keyAtStart) return;
-    const bylineWrapper = document.querySelector('ytmusic-player-bar yt-formatted-string.byline.complex-string, ytmusic-miniplayer .ytmusicTrackInfoByline');
+    const bylineWrapper = PlayerBar.query(ARTIST_BYLINE_SELECTOR);
     if (!bylineWrapper) {
       retryCount++;
       if (retryCount < maxRetries) {
@@ -10417,6 +10567,34 @@ function updateMetaUI(meta) {
       } else {
         ui.artist.innerText = meta.artist; // フォールバック
       }
+      return;
+    }
+
+    const wizLinks = readWizArtistLinks(bylineWrapper);
+    if (wizLinks.length > 0) {
+      const frag = document.createDocumentFragment();
+      wizLinks.forEach((link, index) => {
+        const name = link.textContent.trim();
+        const a = document.createElement('a');
+        a.setAttribute('role', 'link');
+        a.tabIndex = 0;
+        a.style.color = 'inherit';
+        a.style.textDecoration = 'none';
+        a.style.cursor = 'pointer';
+        a.textContent = name;
+        const go = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          openWizArtist(name, index);
+        };
+        a.addEventListener('click', go);
+        a.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(e); });
+        frag.appendChild(a);
+        if (index < wizLinks.length - 1) {
+          frag.appendChild(document.createTextNode(' • '));
+        }
+      });
+      ui.artist.replaceChildren(frag);
       return;
     }
 
@@ -10746,7 +10924,11 @@ const setupTickDrivers = () => {
   const layout = document.querySelector('ytmusic-app-layout');
   if (layout && (!_layoutObserver || _layoutObserver._target !== layout)) {
     _layoutObserver?.disconnect();
-    _layoutObserver = new MutationObserver(() => scheduleTick());
+    _layoutObserver = new MutationObserver(() => {
+      // 広告中は tick が ▼▲ まで進まないので、ここで合わせる
+      syncBarPlayerButton();
+      scheduleTick();
+    });
     _layoutObserver._target = layout;
     _layoutObserver.observe(layout, { attributes: true, attributeFilter: ['player-page-open'] });
   }

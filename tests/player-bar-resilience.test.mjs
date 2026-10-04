@@ -451,7 +451,7 @@ test('▼(プレイヤーを畳む)はいつも出し、使える中で一番よ
   assert.match(ui, /const canMinimizeImmersion = \(\) => document\.body\.classList\.contains\('ytm-custom-layout'\);/)
   const min = ui.slice(ui.indexOf('const minimizeImmersion = () => {'), ui.indexOf('\n};', ui.indexOf('const minimizeImmersion = () => {')))
   // 1. 閲覧ページの上なら隠すだけ
-  assert.match(min, /if \(!readPlayerPageOpen\(\)\) \{\s*_immersionManualOpen = false;/)
+  assert.match(min, /const open = readPlayerPageOpen\(\);[\s\S]*if \(!open\) \{\s*_immersionManualOpen = false;/)
   // 2. YTM の畳むボタン(旧バーの ▼ / 新バーのプレイヤーページの最小化)
   assert.match(ui, /'ytmusic-player-page #collapse-button',\s*'ytmusic-player-bar\[data-ytmi-bar\] \.toggle-player-page-button',\s*'ytmusic-player-bar \.toggle-player-page-button',\s*'ytmusic-player#player \.player-minimize-button',/)
   // 窓の幅で効くボタンが変わるので、描かれているものを先に使う
@@ -459,7 +459,7 @@ test('▼(プレイヤーを畳む)はいつも出し、使える中で一番よ
   assert.match(find, /if \(host\.getClientRects\(\)\.length\) return btn;/)
   assert.match(min, /btn\.click\(\);[\s\S]*setTimeout\(fallback, MINIMIZE_CONFIRM_MS\);/)
   // 3. 畳まれなければ、YTM の中へ読み込み直さずに戻れる時だけ「戻る」、4. だめなら閉じる
-  assert.match(min, /if \(canGoBackInApp\(\)\) history\.back\(\);\s*else setImmersionOpen\(false\);/)
+  assert.match(min, /if \(canGoBackInApp\(\)\) history\.back\(\);\s*else if \(canMinimizeImmersion\(\)\) setImmersionOpen\(false\);/)
   const back = ui.slice(ui.indexOf('const canGoBackInApp = () => {'), ui.indexOf('const canMinimizeImmersion'))
   assert.match(back, /prev\.sameDocument === false\) return false;/)
   assert.match(back, /url\.origin === location\.origin && url\.pathname !== '\/watch'/)
@@ -701,7 +701,7 @@ const barMinimizeWorld = ({ shown = true, floating = false, inFallback = false, 
   const sync = new Function('document', 'PlayerBar', 'canMinimizeImmersion', 'readPlayerPageOpen', 'isPlayingSomething',
     'MODE_TOGGLE_FLOATING_CLASS', 'MINIMIZE_CONFIRM_MS', 'createEl', 'minimizeImmersion', 'setImmersionOpen', 'requestImmersionTick', 'setTimeout', 'config', 't',
     `${src}\nreturn syncBarMinimize;`)(
-    document, { get: () => bar }, () => state.shown, () => state.pageOpen, () => playing,
+    document, { get: () => bar, current: () => null, variant: () => 'none' }, () => state.shown, () => state.pageOpen, () => playing,
     'ytm-mode-toggle-floating', 700, createEl, () => log.push('minimize'), (v) => log.push('immersion:' + v), () => {},
     (fn) => timers.push(fn), { mode }, (k) => labels[k] || k)
   return { sync, toggle, byId, log, state, flush: () => timers.splice(0).forEach(fn => fn()) }
@@ -759,23 +759,45 @@ test('▲: YTM の開くボタンで開かなければ、Immersion が入なら�
   }
 })
 
-test('▼/▲: 旧バー(YTM の ▼▲ が在る)・自前のバー・浮いた IMMERSION では出さない。何も再生していない時・プレイヤーページを Immersion なしで開いている時も', () => {
+test('▼/▲: 旧バー(YTM の ▼▲ が在る)・自前のバー・浮いた IMMERSION では出さない。何も再生していない時も', () => {
   for (const opts of [{ ytmCollapse: true }, { inFallback: true }, { floating: true }, { inBar: false },
-    { shown: false, pageOpen: false, playing: false }, { shown: false, pageOpen: true }]) {
+    { shown: false, pageOpen: false, playing: false }, { shown: false, pageOpen: true, ytmCollapse: true }]) {
     const w = barMinimizeWorld(opts)
     w.sync(w.toggle)
     assert.equal(w.byId['ytmi-bar-minimize'], undefined, JSON.stringify(opts))
   }
   // 出ていたものは、要らなくなったら外す
-  const w = barMinimizeWorld()
+  const w = barMinimizeWorld({ playing: false })
   w.sync(w.toggle)
   let removed = false
   w.byId['ytmi-bar-minimize'].remove = () => { removed = true }
   w.state.shown = false
+  w.state.pageOpen = false
   w.sync(w.toggle)
   assert.ok(removed)
-  // 広告中は tick が止まって外せないので、▼ は CSS でも隠す
-  assert.match(css, /body:not\(\.ytm-custom-layout\) #ytmi-bar-minimize\[data-act="close"\] \{\s*display: none;/)
+  // 広告中は tick が止まって外せないので、▼ は CSS でも隠す(プレイヤーページを開いている間は除く)
+  assert.match(css, /body:not\(\.ytm-custom-layout\) ytmusic-app-layout:not\(\[player-page-open\]\) #ytmi-bar-minimize\[data-act="close"\] \{\s*display: none;/)
+})
+
+test('▼: Immersion を切って曲を大きく出している(プレイヤーページを開いている)間も、新バーに ▼ を出して畳める', () => {
+  const w = barMinimizeWorld({ shown: false, pageOpen: true })
+  w.sync(w.toggle)
+  const el = w.byId['ytmi-bar-minimize']
+  assert.ok(el)
+  assert.equal(el.dataset.act, 'close')
+  el.onclick()
+  assert.deepEqual(w.log, ['minimize'])
+  // 畳む側も、Immersion が出ていなくてもプレイヤーページが開いていれば動く
+  const min = ui.slice(ui.indexOf('const minimizeImmersion = () => {'), ui.indexOf('\n};', ui.indexOf('const minimizeImmersion = () => {')))
+  assert.match(min, /if \(!shown && !open\) return;/)
+  assert.match(min, /else if \(canMinimizeImmersion\(\)\) setImmersionOpen\(false\);/)
+})
+
+test('▼▲: Immersion の出し入れ・プレイヤーページの開閉と同時に合わせる(次の tick を待たない)', () => {
+  // tick は ▼▲ を合わせた後に Immersion の出し入れを変えるので、それだけだと
+  // 開閉の直後に前の状態のまま残っていた
+  assert.match(ui, /const applyImmersionShown = \(shown\) => \{[\s\S]{0,160}syncBarPlayerButton\(\);\s*\};/)
+  assert.match(ui, /_layoutObserver = new MutationObserver\(\(\) => \{[\s\S]{0,120}syncBarPlayerButton\(\);\s*scheduleTick\(\);/)
 })
 
 test('狭い窓の新バーでは、小さな作りを全列に広げて IMMERSION と ▼ を切らない', () => {

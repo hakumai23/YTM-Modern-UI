@@ -117,3 +117,34 @@ test('窓が狭い旧バー(Immersion の外・畳んだ状態)は、再生・�
   // IMMERSION が入でも再生・次へを隠さない(以前は隠していた)
   assert.doesNotMatch(block, /:has\(#my-mode-toggle\.active\) #right-controls-mweb/)
 })
+
+// 新バーのアーティスト名は href を持たない <a role="button">(押すと YTM が中で移動する)。
+// href(channel/…)で拾っていたので、Immersion のアーティスト名が押せない文字になっていた
+test('新バーのアーティスト名: 最初の「•」より前のリンクだけを取り、押したら YTM のリンクを押す', () => {
+  const src = ui.slice(ui.indexOf('const ARTIST_BYLINE_SELECTOR'), ui.indexOf('function updateMetaUI('))
+  const text = (t) => ({ nodeType: 3, textContent: t })
+  const link = (t) => ({ nodeType: 1, textContent: t, clicked: 0, matches: (s) => s === 'a.ytAttributedStringLink', click() { this.clicked++ } })
+  const links = [link('Daft Punk'), link('Pharrell Williams'), link('Nile Rodgers'), link('Random Access Memories')]
+  const host = { childNodes: [links[0], text('、'), links[1], text('、'), links[2], text(' • '), links[3], text(' • 2013年')] }
+  const byline = { classList: { contains: (c) => c === 'ytmusicTrackInfoByline' }, querySelector: () => host }
+  const { readWizArtistLinks, openWizArtist } = new Function('PlayerBar', 'Node',
+    `${src}\nreturn { readWizArtistLinks, openWizArtist };`)({ query: () => byline }, { ELEMENT_NODE: 1 })
+  assert.deepEqual(readWizArtistLinks(byline).map(a => a.textContent), ['Daft Punk', 'Pharrell Williams', 'Nile Rodgers'])
+  openWizArtist('Pharrell Williams', 1)
+  assert.equal(links[1].clicked, 1)
+  // 旧バー(href を持つ)は今までどおり
+  assert.equal(readWizArtistLinks({ classList: { contains: () => false } }).length, 0)
+  assert.match(ui, /const wizLinks = readWizArtistLinks\(bylineWrapper\);/)
+})
+
+// 右の列(時刻・字幕・音量・⋮・IMMERSION・▼)が 1 列分に収まらず、その分だけ
+// 再生ボタンが左へずれていた(1440px 幅で 14px、900px 幅で 86px)
+test('新バーの再生ボタンを真ん中に保つ: 要る分だけバーを広げ、足りなければ時刻を隠し、余白を詰める', () => {
+  assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer\[style\*="--ytmi-bar-need"\] \{\s*max-width: min\(max\(calc\(1000px \* var\(--ytm-ui-scale\)\), var\(--ytmi-bar-need\)\), 95vw\) !important;/)
+  assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer\[data-ytmi-hide-time\] \.ytMusicMiniPlayerTimeInfo \{\s*display: none !important;/)
+  assert.match(css, /body\.ytm-custom-layout ytmusic-miniplayer\[data-ytmi-bar-tight\] \{\s*column-gap: 8px !important;\s*padding: 0 16px !important;/)
+  assert.match(ui, /const WIZ_TIGHT_GAP = 8;\nconst WIZ_TIGHT_PADDING = 16;/)
+  // 開いた時・見張り・窓の大きさ・▼ の出し入れで測り直す
+  assert.match(ui, /if \(PlayerBar\.isFallbackOn\(\)\) PlayerBar\.syncMinimize\(\);\s*balanceWizBar\(\);/)
+  assert.match(ui, /PlayerBar\.rememberDisplay\(PlayerBar\.current\(\), true\);\s*balanceWizBar\(\);/)
+})

@@ -38,3 +38,36 @@ test('4 言語ぶんの文言がある', () => {
   const hits = namespaceSource.match(/settings_prefer_song_mode: "/g) || []
   assert.equal(hits.length, 4)
 })
+
+// 読み込み直後のトグルは playback-mode が "NONE" のまま在り、少しして
+// OMV_PREFERRED に決まる(実機)。"NONE" で諦めていたので、リンクから
+// 開いたり読み込み直したりすると動画のまま残った
+test('playback-mode が決まる前("NONE")は待ち、動画に決まったら「曲」へ切り替える', () => {
+  const start = uiSource.indexOf('const PREFER_SONG_MAX_ATTEMPTS')
+  const end = uiSource.indexOf('\n}', uiSource.indexOf('function preferLyricsDefault('))
+  assert.ok(start !== -1 && end !== -1)
+  const timers = []
+  let clicks = 0
+  const songBtn = { dispatchEvent: () => { clicks++; switcher.mode = 'ATV_PREFERRED' }, click: () => {} }
+  const switcher = {
+    mode: 'NONE',
+    getAttribute: (k) => (k === 'playback-mode' ? switcher.mode : null),
+    querySelector: () => songBtn,
+  }
+  const preferLyricsDefault = new Function('document', 'config', 'currentKey', 'setTimeout', 'MouseEvent',
+    `${uiSource.slice(start, end + 2)}\nreturn preferLyricsDefault;`)(
+    { querySelector: () => switcher }, { preferSongMode: true }, 'song', (fn) => timers.push(fn), class { })
+  preferLyricsDefault('song')
+  assert.equal(clicks, 0)
+  assert.equal(timers.length, 1, '"NONE" では待ち直す')
+  timers.shift()()
+  assert.equal(clicks, 0)
+  switcher.mode = 'OMV_PREFERRED'
+  timers.shift()()
+  assert.equal(clicks, 1)
+  // 曲に決まっていれば何もしない
+  switcher.mode = 'ATV_PREFERRED'
+  timers.length = 0
+  preferLyricsDefault('song')
+  assert.equal(timers.length, 0)
+})
