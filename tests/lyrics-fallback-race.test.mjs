@@ -212,7 +212,7 @@ test('a later character-synced Hub result upgrades an earlier line-synced Hub re
     api: {
       delay: neverResolve,
       fetchFromLrchub: async () => ({
-        lyrics: '[00:01.00]line synced',
+        lyrics: '[00:01.00]same song first line\n[00:05.00]same song second line',
         dynamicLines: [{ chars: [{ c: 'invalid', t: null }] }],
       }),
       fetchFromLrchubSearch: () => searchHub.promise,
@@ -231,7 +231,7 @@ test('a later character-synced Hub result upgrades an earlier line-synced Hub re
   assert.equal(harness.lyricsUpdates.length, 0)
 
   searchHub.resolve({
-    lyrics: '[00:01.00]character synced',
+    lyrics: '[00:01.00]same song first line\n[00:05.00]same song second line',
     dynamicLines: [{
       startTimeMs: 1000,
       chars: [
@@ -260,7 +260,7 @@ test('a later srv3 result upgrades an earlier DynamicLRC response', async () => 
     api: {
       delay: neverResolve,
       fetchFromLrchub: async () => ({
-        lyrics: '[00:01.00]dynamic line',
+        lyrics: '[00:01.00]same song first line\n[00:05.00]same song second line',
         dynamicLines: [{
           startTimeMs: 1000,
           chars: [{ c: 'D', t: 1000 }],
@@ -281,7 +281,7 @@ test('a later srv3 result upgrades an earlier DynamicLRC response', async () => 
 
   const srv3 = '<timedtext format="3"><body><p t="1000" d="500">animated</p></body></timedtext>'
   searchHub.resolve({
-    lyrics: '[00:01.00]animated line',
+    lyrics: '[00:01.00]same song first line\n[00:05.00]same song second line',
     animated_lyrics: srv3,
   })
   await flushMicrotasks()
@@ -387,4 +387,69 @@ test('オフにした LRCHub と LrcLib には問い合わせず、残りの取�
   assert.equal(harness.responses.length, 1)
   assert.equal(harness.responses[0].lyricsSource, 'simpmusic')
   assert.equal(harness.responses[0].lyrics, '[00:01.00]simp line')
+})
+
+// LRCHub には動画 ID で引く本来の経路(手動登録はここ)と、曲名で探す検索がある。
+// 混んで本来の経路が遅れた回に検索が別の曲を当て、後から本来の経路が正しい
+// 歌詞を返しても、品質が同じなので替えずに外れを出し続けていた
+// (星野源のライブ映像で Superorganism「Into The Sun」の歌詞が出た)
+const RIGHT_SONG = '[00:18.82]目が覚めて涎を拭いたら\n[00:24.16]窓辺に光が微笑んでた\n[00:30.00]家族の歌'
+const OTHER_SONG = "[00:00.00](Where are we? Where are we?)\n[00:17.47]Don't mind me, I'm just a fruit fly\n[00:26.31]And I can't even look you in the eye"
+
+test('曲名検索で出した歌詞は、動画 ID で引いた中身の違う歌詞が届いたら訂正として替える', async () => {
+  const primaryHub = deferred()
+  const harness = createBackgroundHarness({
+    api: {
+      fetchFromLrchub: () => primaryHub.promise,
+      fetchFromLrchubSearch: async () => ({ lyrics: OTHER_SONG }),
+    },
+  })
+  harness.dispatch(requestPayload)
+  // 本来の経路は 1.5 秒待っても答えない → 検索が先に出る
+  for (let i = 0; i < 40 && !harness.responses.length; i++) await new Promise(r => setTimeout(r, 100))
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].sourceLabel, 'LRCHub search')
+  assert.match(harness.responses[0].lyrics, /fruit fly/)
+
+  primaryHub.resolve({ lyrics: RIGHT_SONG })
+  await flushMicrotasks()
+  const updates = harness.lyricsUpdates.map(u => u.message.payload)
+  assert.equal(updates.length, 1)
+  assert.equal(updates[0].sourceLabel, 'LRCHub')
+  assert.match(updates[0].lyrics, /涎を拭いたら/)
+  // 品質が同じ(行同期どうし)なので、UI が受けるよう訂正として送る
+  assert.equal(updates[0].correction, true)
+  assert.equal(updates[0].replaces, 'lrchub')
+})
+
+test('動画 ID で引いた歌詞は、中身の違う曲名検索の結果で上書きしない(品質が高くても)', async () => {
+  const searchHub = deferred()
+  const neverResolve = () => new Promise(() => {})
+  const harness = createBackgroundHarness({
+    api: {
+      delay: neverResolve,
+      fetchFromLrchub: async () => ({ lyrics: RIGHT_SONG }),
+      fetchFromLrchubSearch: () => searchHub.promise,
+    },
+  })
+  harness.dispatch(requestPayload)
+  await flushMicrotasks()
+  assert.equal(harness.responses.length, 1)
+  assert.equal(harness.responses[0].sourceLabel, 'LRCHub')
+
+  searchHub.resolve({
+    lyrics: OTHER_SONG,
+    dynamicLines: [{ startTimeMs: 0, chars: [{ c: 'W', t: 0 }, { c: 'h', t: 100 }] }],
+  })
+  await flushMicrotasks()
+  assert.equal(harness.lyricsUpdates.length, 0)
+})
+
+test('UI: 曲名検索でキャッシュした歌詞は、動画 ID で引けた中身の違う歌詞で替える', () => {
+  const ui = fs.readFileSync(new URL('../src/js/module/lyrics-ui.js', import.meta.url), 'utf8')
+  // キャッシュに経路を残す(最初の取得と、後から届いた差し替えの両方)
+  assert.match(ui, /lyricsSource: res\.lyricsSource \|\| null,\s*sourceLabel: res\.sourceLabel \|\| null,/)
+  assert.match(ui, /lyricsSource: lateSource,\s*sourceLabel: payload\.sourceLabel \|\| null,/)
+  assert.match(ui, /const cachedFromTitleSearch = cachedSourceLabel === 'LRCHub search';/)
+  assert.match(ui, /\(res\?\.agreement === 'confirmed' \|\| \(responseFromVideo && cachedFromTitleSearch\)\)/)
 })

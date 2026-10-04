@@ -39,6 +39,11 @@ const FIRST_OPINION_WAIT_MS = 500;
 // 以前は最初に届いたものがそのまま採られ、後から届いたより確かなものに替わらなかった。
 const WORDSYNC_COLLECT_MS = 1000;
 
+// LRCHub の経路の名前(makeRawHubTask の source)。動画 ID で引く経路と、
+// 曲名で探す経路を見分ける(pushHubUpgrade)
+const VIDEO_KEYED_HUB_SOURCES = new Set(['LRCHub', 'LRCHub retry']);
+const HUB_TITLE_SEARCH_SOURCE = 'LRCHub search';
+
 // content script から届く YouTube Music の歌詞(突き合わせの票)を、
 // 走っている GET_LYRICS へ渡す口。キーは request_id。
 // 時計で消すと Service Worker を起こし続けるので、数で抑える(古いものから消す)。
@@ -696,6 +701,36 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       const pushHubUpgrade = async (hubResult) => {
         if (!responded || !hubResult?.res) return false;
         const providerId = hubResult.providerId || 'lrchub';
+        // LRCHub には 2 つの引き方がある。動画 ID で引く本来の経路(手動で
+        // 登録した歌詞はここに来る)と、曲名で探す検索。検索は推測なので、
+        // 当たる曲が違うことがある。LRCHub が混んで本来の経路が遅れた回に
+        // 検索が先に出し、後から本来の経路が正しい歌詞を返しても、品質が
+        // 同じだと替えずに外れを出し続けていた(実機: 星野源のライブ映像で
+        // 別の曲の歌詞。手動登録した歌詞が出ない)。
+        //  ・検索で出した歌詞と中身の違う歌詞が本来の経路から届いたら、
+        //    品質が下がっても訂正として替える
+        //  ・本来の経路で出した歌詞を、中身の違う検索結果では替えない
+        const disagreesWithShown = () => !!(
+          deliveredResult?.res?.lyrics && typeof hubResult.res.lyrics === 'string' &&
+          Agreement.lyricsAgreement(hubResult.res.lyrics, deliveredResult.res.lyrics) < Agreement.LYRICS_AGREE_MIN
+        );
+        if (providerId === 'lrchub' && deliveredProviderId === 'lrchub') {
+          const fromVideo = VIDEO_KEYED_HUB_SOURCES.has(hubResult.source);
+          const shownFromVideo = VIDEO_KEYED_HUB_SOURCES.has(deliveredResult?.source);
+          if (fromVideo && deliveredResult?.source === HUB_TITLE_SEARCH_SOURCE && disagreesWithShown()) {
+            const replaces = deliveredProviderId;
+            deliveredHubQuality = getHubLyricsQuality(hubResult.res);
+            deliveredResult = hubResult;
+            YTMLog.log(`[BG] 曲名検索で出した歌詞を、動画に結び付いた ${hubResult.source} の歌詞に替える`);
+            return pushLyricsUpdate({
+              ...buildHubLyricsPayload(hubResult.res, hubResult.source, providerId),
+              agreement: verdictOf(hubResult) || 'unknown',
+              correction: true,
+              replaces,
+            });
+          }
+          if (hubResult.source === HUB_TITLE_SEARCH_SOURCE && shownFromVideo && disagreesWithShown()) return false;
+        }
         // LRCHub の歌詞には翻訳・解説・候補が同じタイムラインで乗っている。
         // 外部プロバイダーが単語同期という一点だけで上書きすると、
         // 表示済みの翻訳ごと消えてしまうので、ふだんは差し替えない。
@@ -917,7 +952,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
         // DynamicLRC (4) が先着していても、最上位の srv3 (5) を検索する。
         if (getHubLyricsQuality(earlyPrimary.res) < 5) {
           const earlySearchTask = makeRawHubTask(
-            'LRCHub search',
+            HUB_TITLE_SEARCH_SOURCE,
             API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to, video_id: resolvedVideoId }),
             'LRCHub search'
           );
@@ -968,7 +1003,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
       const searchRawTask = lrchubOn
         ? makeRawHubTask(
-          'LRCHub search',
+          HUB_TITLE_SEARCH_SOURCE,
           API.fetchFromLrchubSearch({ track, artist, limit: 30, translate_to, video_id: resolvedVideoId }),
           'LRCHub search'
         )

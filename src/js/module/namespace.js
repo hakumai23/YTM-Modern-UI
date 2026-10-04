@@ -108,9 +108,23 @@ const parseBylineArtist = (text) => splitBylineParts(text)[0] || '';
 //
 // 全角の（）【】も落とす。日本語の曲名で普通に使われるため。
 // 全部削って空になる曲名("(Interlude)" など)は、元の曲名をそのまま返す。
-const normalizeSearchTrackTitle = (s) => {
+//
+// ライブ映像や MV は「アーティスト – 曲名 (Live …)」の形が多い。ハイフン
+// 以降を落とすと曲名の方が消え、アーティスト名だけで検索することになる。
+// 実機: 「星野源 – Family Song (Live at Saitama Super Arena 2017)」が
+// 「星野源」になり、LRCHub の検索で星野源さんが参加した別の曲
+// (Superorganism「Into The Sun」)の歌詞が出ていた。
+// ハイフンの前がアーティスト名(artist)と同じなら、後ろを曲名とみなす。
+const normalizeSearchTrackTitle = (s, artist = '') => {
   const raw = String(s || '').trim();
-  const stripped = raw
+  const nameKey = (v) => String(v || '').normalize('NFKC').toLowerCase().replace(/[\s・.,、'’"“”]/g, '');
+  const artistKey = nameKey(artist);
+  const parts = raw.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  const headKey = parts ? nameKey(parts[1]) : '';
+  const headIsArtist = !!(artistKey && headKey.length >= 2 &&
+    (headKey === artistKey || artistKey.includes(headKey) || headKey.includes(artistKey)));
+  const title = headIsArtist ? parts[2] : raw;
+  const stripped = title
     .replace(/\s*[\(\[（【][^\)\]）】]*[\)\]）】]\s*/g, ' ')
     .replace(/\s+[-–—]\s+.*$/, '')
     .replace(/\s+/g, ' ')

@@ -2528,6 +2528,7 @@ async function applyLateLyricsUpgrade(payload) {
           config: lyricsConfig || null,
           lockState: lyricsLockState || null,
           lyricsSource: lateSource,
+          sourceLabel: payload.sourceLabel || null,
           fetchedAt: Date.now(),
           fallbackUsed: false,
           lyricsQuality: selected.quality,
@@ -3521,8 +3522,8 @@ async function applyTranslations(baseLines, youtubeUrl) {
       const missingLangs = langsToFetch.filter(lang => !lrcMap[normalizeTranslationLangKey(lang)]);
       if (missingLangs.length) {
         const metaNow = getMetadata();
-        const track = normalizeSearchTrackTitle(metaNow?.title);
         const artist = metaNow?.artist || '';
+        const track = normalizeSearchTrackTitle(metaNow?.title, artist);
         const res = await safeRuntimeSendMessage({
           type: 'GET_TRANSLATION',
           payload: {
@@ -7472,6 +7473,8 @@ async function loadLyrics(meta, options = {}) {
   let noLyricsCached = false;
   let cachedSingerRecordId = null;
   let cachedCanonicalLyrics = '';
+  // キャッシュの歌詞が LRCHub のどの経路から来たか(background の sourceLabel)
+  let cachedSourceLabel = '';
   if (cached !== null && cached !== undefined) {
     if (cached === NO_LYRICS_SENTINEL) {
       noLyricsCached = true;
@@ -7496,6 +7499,7 @@ async function loadLyrics(meta, options = {}) {
         const cachedSelection = selectLyricsPayload(cached);
         data = cachedSelection.text;
         cachedSingerRecordId = String(cached.record_id || cached.recordId || '').trim() || null;
+        cachedSourceLabel = String(cached.sourceLabel || '');
         cachedCanonicalLyrics = cachedSelection.lyrics || data || '';
         dynamicLines = cachedSelection.dynamicLines;
         if (typeof cached.subLyrics === 'string') duetSubLyricsRaw = cached.subLyrics;
@@ -7560,8 +7564,8 @@ async function loadLyrics(meta, options = {}) {
   // Always fetch fresh data from URL as requested
   let gotLyrics = false;
   try {
-    const track = normalizeSearchTrackTitle(meta.title);
     const artist = meta.artist;
+    const track = normalizeSearchTrackTitle(meta.title, artist);
     const youtube_url = getCurrentVideoUrl();
     const video_id = requestVideoId;
     const translate_to = getRequestedLrchubTranslateLangs();
@@ -7815,7 +7819,15 @@ async function loadLyrics(meta, options = {}) {
     const responsePriority = hasResponseLyrics ? (res?.fallbackUsed ? 1 : 2) : 0;
     // 先に出したキャッシュが外れ(他の取得元が裏付けた歌詞と中身が違う)なら、
     // 品質が下がっても替える。本人が選んだ歌詞(優先度 3)は替えない。
-    const responseReplacesWrong = hasResponseLyrics && res?.agreement === 'confirmed' &&
+    // LRCHub の曲名検索で出してキャッシュした歌詞は推測なので、動画 ID で
+    // 引けた歌詞(手動登録はここに来る)と中身が違えば、品質が下がっても替える
+    // (background の pushHubUpgrade と同じ考え。星野源のライブ映像で、検索が
+    // 当てた別の曲の歌詞がキャッシュに残り続けていた)
+    const responseFromVideo = res?.lyricsSource === 'lrchub' &&
+      (res?.sourceLabel === 'LRCHub' || res?.sourceLabel === 'LRCHub retry');
+    const cachedFromTitleSearch = cachedSourceLabel === 'LRCHub search';
+    const responseReplacesWrong = hasResponseLyrics &&
+      (res?.agreement === 'confirmed' || (responseFromVideo && cachedFromTitleSearch)) &&
       currentLyricsResultPriority < 3 && selectedResponse.mode !== 'animated' &&
       typeof data === 'string' && data.trim() &&
       lyricsAgreement(data, responseLyrics || preferredLyrics) < LYRICS_AGREE_MIN;
@@ -7896,6 +7908,7 @@ async function loadLyrics(meta, options = {}) {
           config: lyricsConfig || null,
           lockState: lyricsLockState || null,
           lyricsSource: res.lyricsSource || null,
+          sourceLabel: res.sourceLabel || null,
           fetchedAt: Date.now(),
           fallbackUsed: !!res.fallbackUsed,
           lyricsQuality: selectedResponse.quality,
