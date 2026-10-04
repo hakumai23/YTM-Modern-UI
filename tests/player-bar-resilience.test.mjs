@@ -888,3 +888,11 @@ test('YTM がシークバーを押せなくしていたら(狭い窓の旧バー
   w2.PlayerBar.check({ shown: true, skip: false })
   assert.equal(w2.PlayerBar.isFallbackOn(), false)
 })
+
+// 旧バーの左の列は YTM が style 属性で幅を直書きする(449px)。縮まない指定のままだと、
+// 足りない分を音量スライダーが受けて 100px → 32px に潰れ、⋮ に重なっていた(issue #115)
+test('旧バーの音量スライダーを潰さない: 左の列を先に縮め、中身の幅で止める', () => {
+  assert.match(css, /body\.ytm-custom-layout ytmusic-player-bar > \.left-controls \{\s*flex: 0 100 auto !important;\s*min-width: min-content !important;\s*\}/)
+  // 一般の「左の列は縮めない」より後に来て、上書きできる詳しさであること
+  assert.ok(css.indexOf('body.ytm-custom-layout ytmusic-player-bar > .left-controls {') > css.indexOf('body.ytm-custom-layout .left-controls {'))
+})

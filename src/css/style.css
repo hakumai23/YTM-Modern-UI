@@ -2848,6 +2848,16 @@ body.ytm-custom-layout .left-controls {
   justify-content: flex-start !important;
 }
 
+/* 旧バーの左の列は、YTM が style 属性で幅を直に書く(実機で 449px。中身の
+   曲送り・再生・時刻は約 240px)。縮まない指定のままだと 1000px のバーでは
+   空きが無く、足りない分を右の列で唯一縮む音量スライダーが受け、100px が
+   32px ほどに潰れて ⋮ に重なっていた(issue #115)。左の列を先に縮め、
+   中身の幅で止める。中身より狭くはならないので、ボタンや時刻は切れない */
+body.ytm-custom-layout ytmusic-player-bar > .left-controls {
+  flex: 0 100 auto !important;
+  min-width: min-content !important;
+}
+
 /* 荳ｭ螟ｮ蛛ｴ縺ｮ蜀咲函繝懊ち繝ｳ繧帝國縺� */
 body.ytm-custom-layout ytmusic-player-bar .middle-controls ytmusic-play-button-renderer {
   display: none !important;
