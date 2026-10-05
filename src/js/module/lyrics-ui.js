@@ -10537,7 +10537,9 @@ function updateMetaUI(meta) {
         const canvas = document.createElement('canvas');
         canvas.width = 64;
         canvas.height = 64;
-        const ctx = canvas.getContext('2d');
+        // 明るさとバーの色で 2 回読み出すので、最初から読み出し向けにしておく
+        // (無いと Chrome が willReadFrequently を付けるよう警告を出す)
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.filter = 'blur(4px)';
         ctx.drawImage(img, 0, 0, 64, 64);
         const blurredDataUrl = canvas.toDataURL();

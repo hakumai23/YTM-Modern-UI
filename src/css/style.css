@@ -3017,7 +3017,7 @@ body:not(.ytm-custom-layout) ytmusic-miniplayer, body:not(.ytm-custom-layout) yt
   overflow: visible !important;
 }
 
-body:not(.ytm-custom-layout) ytmusic-player-bar tp-yt-paper-slider#progress-bar, body:not(.ytm-custom-layout) ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {
+body:not(.ytm-custom-layout) ytmusic-player-bar tp-yt-paper-slider#progress-bar {
   position: absolute !important;
   top: -5px !important;
   left: -5px !important;
@@ -3027,6 +3027,17 @@ body:not(.ytm-custom-layout) ytmusic-player-bar tp-yt-paper-slider#progress-bar,
   height: 20px !important;
   z-index: 10 !important;
 
+}
+
+/* 新バーのシークバー。上端の線に載せる作り(上端の中央・幅いっぱい・z-index 1)は
+   YTM のままにして、角丸(16px)で両端が浮かないよう内側へ寄せるだけにする。
+   旧バーの指定(左 -5px・幅 98%+5px・z-index 10)を当てると、線が角丸の外へ
+   はみ出し、音量の縦スライダー(右の列、z-index 2)の下半分にも被さって、
+   アイコンからスライダーへマウスを上げる途中で吹き出しが閉じていた */
+body:not(.ytm-custom-layout) ytmusic-miniplayer .ytMusicMiniPlayerProgressBarWrapper {
+  left: 16px !important;
+  right: 16px !important;
+  width: auto !important;
 }
 
 body:not(.ytm-custom-layout) #player-bar-background {
@@ -3099,7 +3110,11 @@ body:not(.ytm-custom-layout) ytmusic-player-bar .right-controls tp-yt-paper-icon
 }
 
 
-body:not(.ytm-custom-layout) #hover-time-info-new, #hover-time-info, .ytMusicMiniPlayerHoverTimeInfo {
+/* 3 つとも非 Immersion の時だけ。条件を先頭にしか付けないと、後ろの 2 つは
+   Immersion 中にも当たり、シークバーの時刻表示が非 Immersion の見た目になる */
+body:not(.ytm-custom-layout) #hover-time-info-new,
+body:not(.ytm-custom-layout) #hover-time-info,
+body:not(.ytm-custom-layout) .ytMusicMiniPlayerHoverTimeInfo {
   font-family: Roboto, Noto Naskh Arabic UI, Arial, sans-serif !important;
   font-size: var(--ytmusic-caption-1-font-size) !important;
   line-height: var(--ytmusic-title-line-height) !important;
@@ -5456,13 +5471,14 @@ body.ytm-custom-layout:not(.ytm-lightweight-mode) #ytm-meaning-summary-backdrop.
   -webkit-backdrop-filter: blur(36px) saturate(180%) !important;
 }
 
-body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-player-bar {
+/* 新バー(ytmusic-miniplayer)にも旧バーと同じすりガラスを掛ける */
+body.ytm-custom-layout:not(.ytm-lightweight-mode) :is(ytmusic-player-bar, ytmusic-miniplayer) {
   backdrop-filter: blur(24px) saturate(180%) !important;
   -webkit-backdrop-filter: blur(24px) saturate(180%) !important;
   background: rgba(20, 20, 20, 0.55) !important;
 }
 
-body.ytm-custom-layout:not(.ytm-lightweight-mode) ytmusic-player-bar.moviemode {
+body.ytm-custom-layout:not(.ytm-lightweight-mode) :is(ytmusic-player-bar, ytmusic-miniplayer).moviemode {
   backdrop-filter: blur(8px) saturate(100%) !important;
   -webkit-backdrop-filter: blur(8px) saturate(100%) !important;
 }
